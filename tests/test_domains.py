@@ -222,6 +222,7 @@ class TestGithubAlias:
         assert "github.com" in result
         assert "api.github.com" in result
         assert "raw.githubusercontent.com" in result
+        assert "release-assets.githubusercontent.com" in result
 
     def test_github_alias_combined_with_default(self):
         """'default' + 'github' includes vertexai, pypi, and github domains."""

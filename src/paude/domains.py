@@ -21,6 +21,7 @@ DOMAIN_ALIASES: dict[str, list[str]] = {
         "api.github.com",
         "raw.githubusercontent.com",
         "codeload.github.com",
+        "release-assets.githubusercontent.com",
     ],
 }
 
