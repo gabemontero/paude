@@ -259,6 +259,18 @@ def status_sessions(
                 pass
         rows.append((session, session.backend_type, activity))
 
+    def _sort_key(
+        r: tuple[Session, str, SessionActivity | None],
+    ) -> tuple[int, float]:
+        status_order = 0 if r[0].status == "running" else 1
+        activity = r[2]
+        elapsed: float = float("inf")
+        if activity and activity.elapsed_seconds is not None:
+            elapsed = activity.elapsed_seconds
+        return (status_order, elapsed)
+
+    rows.sort(key=_sort_key)
+
     cols = (
         f"{'SESSION':<20} {'PROJECT':<15} {'BACKEND':<10} "
         f"{'STATUS':<10} {'ACTIVITY':<10} {'STATE'}"

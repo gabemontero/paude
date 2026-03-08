@@ -9,92 +9,97 @@ from paude.session_status import (
     SessionActivity,
     _detect_state,
     _format_elapsed,
+    _parse_elapsed_seconds,
     get_session_activity,
     parse_activity,
 )
+
+
+class TestParseElapsedSeconds:
+    """Tests for _parse_elapsed_seconds."""
+
+    def test_valid_timestamp(self) -> None:
+        ts = str(int(time.time()) - 30)
+        result = _parse_elapsed_seconds(ts)
+        assert result is not None
+        assert 29 <= result <= 31
+
+    def test_invalid_timestamp(self) -> None:
+        assert _parse_elapsed_seconds("not-a-number") is None
+
+    def test_empty_string(self) -> None:
+        assert _parse_elapsed_seconds("") is None
+
+    def test_multiline_takes_first(self) -> None:
+        ts = str(int(time.time()) - 60)
+        result = _parse_elapsed_seconds(f"{ts}\nextra")
+        assert result is not None
+        assert 59 <= result <= 61
 
 
 class TestFormatElapsed:
     """Tests for _format_elapsed."""
 
     def test_seconds_ago(self) -> None:
-        ts = str(int(time.time()) - 30)
-        result = _format_elapsed(ts)
-        assert result == "30s ago"
+        assert _format_elapsed(30) == "30s ago"
 
     def test_minutes_ago(self) -> None:
-        ts = str(int(time.time()) - 300)
-        result = _format_elapsed(ts)
-        assert result == "5m ago"
+        assert _format_elapsed(300) == "5m ago"
 
     def test_hours_ago(self) -> None:
-        ts = str(int(time.time()) - 7200)
-        result = _format_elapsed(ts)
-        assert result == "2h ago"
+        assert _format_elapsed(7200) == "2h ago"
 
     def test_days_ago(self) -> None:
-        ts = str(int(time.time()) - 172800)
-        result = _format_elapsed(ts)
-        assert result == "2d ago"
+        assert _format_elapsed(172800) == "2d ago"
 
     def test_just_now(self) -> None:
-        ts = str(int(time.time()) + 10)
-        result = _format_elapsed(ts)
-        assert result == "just now"
+        assert _format_elapsed(-10) == "just now"
 
-    def test_invalid_timestamp(self) -> None:
-        result = _format_elapsed("not-a-number")
-        assert result == "unknown"
-
-    def test_empty_string(self) -> None:
-        result = _format_elapsed("")
-        assert result == "unknown"
-
-    def test_multiline_takes_first(self) -> None:
-        ts = str(int(time.time()) - 60)
-        result = _format_elapsed(f"{ts}\nextra")
-        assert result == "1m ago"
+    def test_none(self) -> None:
+        assert _format_elapsed(None) == "unknown"
 
 
 class TestDetectState:
     """Tests for _detect_state."""
 
     def test_active_recent(self) -> None:
-        ts = str(int(time.time()) - 30)
-        assert _detect_state(ts) == "Active"
+        assert _detect_state(30) == "Active"
 
     def test_idle_old(self) -> None:
-        ts = str(int(time.time()) - 600)
-        assert _detect_state(ts) == "Idle"
+        assert _detect_state(600) == "Idle"
 
     def test_active_boundary(self) -> None:
-        ts = str(int(time.time()) - 119)
-        assert _detect_state(ts) == "Active"
+        assert _detect_state(119) == "Active"
 
     def test_idle_boundary(self) -> None:
-        ts = str(int(time.time()) - 120)
-        assert _detect_state(ts) == "Idle"
+        assert _detect_state(120) == "Idle"
 
-    def test_invalid_timestamp(self) -> None:
-        assert _detect_state("not-a-number") == "Idle"
-
-    def test_empty_string(self) -> None:
-        assert _detect_state("") == "Idle"
+    def test_none(self) -> None:
+        assert _detect_state(None) == "Idle"
 
 
 class TestParseActivity:
     """Tests for parse_activity."""
 
-    def test_returns_active(self) -> None:
+    def test_returns_active_with_elapsed(self) -> None:
         ts = str(int(time.time()) - 30)
         result = parse_activity(ts)
         assert isinstance(result, SessionActivity)
         assert result.state == "Active"
+        assert result.elapsed_seconds is not None
+        assert 29 <= result.elapsed_seconds <= 31
 
-    def test_returns_idle(self) -> None:
+    def test_returns_idle_with_elapsed(self) -> None:
         ts = str(int(time.time()) - 300)
         result = parse_activity(ts)
         assert result.state == "Idle"
+        assert result.elapsed_seconds is not None
+        assert 299 <= result.elapsed_seconds <= 301
+
+    def test_invalid_timestamp_returns_none_elapsed(self) -> None:
+        result = parse_activity("garbage")
+        assert result.elapsed_seconds is None
+        assert result.last_activity == "unknown"
 
 
 class TestGetSessionActivity:

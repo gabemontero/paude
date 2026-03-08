@@ -15,10 +15,12 @@ class SessionActivity:
     Attributes:
         last_activity: Human-readable time since last activity (e.g., "2m ago").
         state: Session state ("Working", "Idle", "Waiting for input", "Stopped").
+        elapsed_seconds: Seconds since last activity, or None if unknown.
     """
 
     last_activity: str
     state: str
+    elapsed_seconds: int | None = None
 
 
 _TMUX_QUERY_CMD = (
@@ -51,26 +53,39 @@ def parse_activity(activity_timestamp: str) -> SessionActivity:
     Returns:
         SessionActivity with parsed state.
     """
-    last_activity = _format_elapsed(activity_timestamp)
-    state = _detect_state(activity_timestamp)
-    return SessionActivity(last_activity=last_activity, state=state)
+    elapsed = _parse_elapsed_seconds(activity_timestamp)
+    last_activity = _format_elapsed(elapsed)
+    state = _detect_state(elapsed)
+    return SessionActivity(
+        last_activity=last_activity, state=state, elapsed_seconds=elapsed
+    )
 
 
-def _format_elapsed(timestamp_str: str) -> str:
-    """Format a unix timestamp as elapsed time (e.g., '2m ago').
-
-    Args:
-        timestamp_str: Unix timestamp as string.
+def _parse_elapsed_seconds(timestamp_str: str) -> int | None:
+    """Parse a unix timestamp string into elapsed seconds since now.
 
     Returns:
-        Human-readable elapsed time string, or "unknown" if unparseable.
+        Elapsed seconds (may be negative if timestamp is in the future),
+        or None if unparseable.
     """
     try:
         ts = int(timestamp_str.strip().split("\n")[0])
     except (ValueError, IndexError):
-        return "unknown"
+        return None
+    return int(time.time()) - ts
 
-    elapsed = int(time.time()) - ts
+
+def _format_elapsed(elapsed: int | None) -> str:
+    """Format elapsed seconds as human-readable time (e.g., '2m ago').
+
+    Args:
+        elapsed: Seconds since last activity, or None if unknown.
+
+    Returns:
+        Human-readable elapsed time string, or "unknown" if None.
+    """
+    if elapsed is None:
+        return "unknown"
     if elapsed < 0:
         return "just now"
     if elapsed < 60:
@@ -82,18 +97,13 @@ def _format_elapsed(timestamp_str: str) -> str:
     return f"{elapsed // 86400}d ago"
 
 
-def _detect_state(timestamp_str: str) -> str:
-    """Detect session state from tmux activity timestamp.
+def _detect_state(elapsed: int | None) -> str:
+    """Detect session state from elapsed seconds.
 
-    Uses only the timestamp — no terminal content heuristics.
     Active if activity within the last 2 minutes, Idle otherwise.
     """
-    try:
-        ts = int(timestamp_str.strip().split("\n")[0])
-    except (ValueError, IndexError):
+    if elapsed is None:
         return "Idle"
-
-    elapsed = int(time.time()) - ts
     if elapsed < 120:
         return "Active"
     return "Idle"

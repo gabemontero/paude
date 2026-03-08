@@ -224,7 +224,7 @@ class TestStatusSessions:
         mock_backend = MagicMock()
         mock_collect.return_value = [(mock_session, mock_backend)]
         mock_activity.return_value = SessionActivity(
-            last_activity="2m ago", state="Active"
+            last_activity="2m ago", state="Active", elapsed_seconds=120
         )
 
         status_sessions()
@@ -272,6 +272,62 @@ class TestStatusSessions:
         assert "Stopped" in captured.out
         # Activity should not be queried for stopped sessions
         mock_activity.assert_not_called()
+
+    @patch("paude.session_status.get_session_activity")
+    @patch("paude.session_discovery.collect_all_sessions")
+    def test_sorts_by_activity(
+        self,
+        mock_collect: MagicMock,
+        mock_activity: MagicMock,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from paude.backends.base import Session
+        from paude.session_status import SessionActivity
+
+        # Create sessions: stopped, idle running, active running
+        stopped = Session(
+            name="stopped-ses",
+            status="stopped",
+            workspace=Path("/workspace/p1"),
+            created_at="2026-01-01T00:00:00Z",
+            backend_type="podman",
+        )
+        idle_running = Session(
+            name="idle-ses",
+            status="running",
+            workspace=Path("/workspace/p2"),
+            created_at="2026-01-01T00:00:00Z",
+            backend_type="podman",
+        )
+        active_running = Session(
+            name="active-ses",
+            status="running",
+            workspace=Path("/workspace/p3"),
+            created_at="2026-01-01T00:00:00Z",
+            backend_type="podman",
+        )
+        mock_backend = MagicMock()
+        # Order: stopped first, then idle, then active (wrong order)
+        mock_collect.return_value = [
+            (stopped, mock_backend),
+            (idle_running, mock_backend),
+            (active_running, mock_backend),
+        ]
+        mock_activity.side_effect = [
+            SessionActivity(last_activity="10m ago", state="Idle", elapsed_seconds=600),
+            SessionActivity(last_activity="5s ago", state="Active", elapsed_seconds=5),
+        ]
+
+        status_sessions()
+
+        captured = capsys.readouterr()
+        lines = captured.out.strip().split("\n")
+        # Skip header and separator
+        data_lines = lines[2:]
+        # active-ses (5s) should be first, idle-ses (10m) second, stopped last
+        assert "active-ses" in data_lines[0]
+        assert "idle-ses" in data_lines[1]
+        assert "stopped-ses" in data_lines[2]
 
 
 class TestResetSession:
