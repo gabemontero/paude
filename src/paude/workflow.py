@@ -326,8 +326,18 @@ def reset_session(
         raise typer.Exit(1)
 
     if not keep_conversation:
-        typer.echo("Clearing conversation history...", err=True)
-        clear_cmd = "rm -rf /home/paude/.claude/projects/ /home/paude/.claude/todos/"
+        typer.echo("Clearing conversation history and sending /clear...", err=True)
+        # Delete conversation history but preserve per-project settings
+        # (settings.local.json, CLAUDE.md), then send /clear to Claude
+        clear_cmd = (
+            "find /home/paude/.claude/projects/ "
+            r"\( -name '*.jsonl' -o -name 'sessions-index.json' \) "
+            "-delete 2>/dev/null; "
+            "find /home/paude/.claude/projects/ -mindepth 2 -maxdepth 2 -type d "
+            "-exec rm -rf {} + 2>/dev/null; "
+            "rm -rf /home/paude/.claude/todos/; "
+            'tmux send-keys -t claude "/clear" Enter'
+        )
         backend.exec_in_session(session_name, clear_cmd)
 
     typer.echo(f"Session '{session_name}' reset to '{branch}'.", err=True)
