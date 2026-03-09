@@ -220,13 +220,10 @@ Technical debt identified during codebase analysis. Address these before adding 
 
 ### REFACTOR-005: Extract `_find_container_by_session_name` helper in PodmanBackend
 
-**Status**: Open
+**Status**: Resolved
 **Priority**: Medium
 **Discovered**: 2026-03-08 during proxy health check implementation
-
-**Problem:** The pattern of iterating `list_containers()` results and filtering by `PAUDE_LABEL_SESSION` is repeated in `list_sessions()`, `get_session()`, and the new `_get_proxy_config_from_labels()`. Each method calls `self._runner.list_containers(label_filter=PAUDE_LABEL_APP)`, loops over results, extracts labels, and matches by session name.
-
-**Proposed fix:** Extract a `_find_container_by_session_name(name: str) -> dict[str, Any] | None` helper that returns the raw container dict for a given session name. Methods like `get_session()` and `_get_proxy_config_from_labels()` would call this instead of reimplementing the lookup. `list_sessions()` still needs the full loop but could share the label extraction logic.
+**Resolved**: 2026-03-09 — Extracted `_find_container_by_session_name()` and `_build_session_from_container()` helpers. `get_session()`, `_get_proxy_config_from_labels()`, and `list_sessions()` now use these instead of duplicated lookup/construction logic.
 
 **Related files:**
 - `src/paude/backends/podman.py` (`list_sessions`, `get_session`, `_get_proxy_config_from_labels`)

@@ -182,6 +182,57 @@ class PodmanBackend:
             )
         return container_name
 
+    def _find_container_by_session_name(self, name: str) -> dict[str, Any] | None:
+        """Find a container by session name label.
+
+        Args:
+            name: Session name to search for.
+
+        Returns:
+            Container dict if found, None otherwise.
+        """
+        containers = self._runner.list_containers(label_filter=PAUDE_LABEL_APP)
+        for container in containers:
+            labels = container.get("Labels", {}) or {}
+            if labels.get(PAUDE_LABEL_SESSION) == name:
+                return container
+        return None
+
+    def _build_session_from_container(
+        self, name: str, container: dict[str, Any]
+    ) -> Session:
+        """Build a Session object from a container dict.
+
+        Args:
+            name: Session name.
+            container: Raw container dict from list_containers.
+
+        Returns:
+            Fully-constructed Session object.
+        """
+        labels = container.get("Labels", {}) or {}
+
+        workspace_encoded = labels.get(PAUDE_LABEL_WORKSPACE, "")
+        workspace = (
+            decode_path(workspace_encoded, url_safe=True)
+            if workspace_encoded
+            else Path("/")
+        )
+        created_at = labels.get(PAUDE_LABEL_CREATED, "")
+
+        status = _get_container_status(container)
+        status = self._check_proxy_health(name, labels, status)
+
+        return Session(
+            name=name,
+            status=status,
+            workspace=workspace,
+            created_at=created_at,
+            backend_type="podman",
+            container_id=container.get("Id", ""),
+            volume_name=self._volume_name(name),
+        )
+
     def _has_proxy(self, session_name: str) -> bool:
         """Check if a session has a proxy container."""
         return self._runner.container_exists(self._proxy_container_name(session_name))
@@ -421,24 +472,22 @@ class PodmanBackend:
             Tuple of (proxy_image, domains) if proxy was configured,
             None if session has no proxy configuration.
         """
-        containers = self._runner.list_containers(label_filter=PAUDE_LABEL_APP)
-        for container in containers:
-            labels = container.get("Labels", {}) or {}
-            if labels.get(PAUDE_LABEL_SESSION) != name:
-                continue
+        container = self._find_container_by_session_name(name)
+        if container is None:
+            return None
 
-            domains_str = labels.get(PAUDE_LABEL_DOMAINS)
-            if domains_str is None:
-                return None  # No proxy configured
+        labels = container.get("Labels", {}) or {}
 
-            proxy_image = labels.get(PAUDE_LABEL_PROXY_IMAGE, "")
-            if not proxy_image:
-                return None  # Can't recreate without image
+        domains_str = labels.get(PAUDE_LABEL_DOMAINS)
+        if domains_str is None:
+            return None  # No proxy configured
 
-            domains = [d for d in domains_str.split(",") if d]
-            return (proxy_image, domains)
+        proxy_image = labels.get(PAUDE_LABEL_PROXY_IMAGE, "")
+        if not proxy_image:
+            return None  # Can't recreate without image
 
-        return None
+        domains = [d for d in domains_str.split(",") if d]
+        return (proxy_image, domains)
 
     def _start_proxy_if_needed(self, name: str) -> None:
         """Start or recreate the proxy container for a session.
@@ -647,40 +696,16 @@ class PodmanBackend:
         Returns:
             List of Session objects.
         """
-        # Find all paude containers
         containers = self._runner.list_containers(label_filter=PAUDE_LABEL_APP)
 
         sessions = []
         for container in containers:
             labels = container.get("Labels", {}) or {}
-
             session_name = labels.get(PAUDE_LABEL_SESSION)
             if not session_name:
                 continue
 
-            workspace_encoded = labels.get(PAUDE_LABEL_WORKSPACE, "")
-            workspace = (
-                decode_path(workspace_encoded, url_safe=True)
-                if workspace_encoded
-                else Path("/")
-            )
-            created_at = labels.get(PAUDE_LABEL_CREATED, "")
-
-            # Get session status from container state
-            status = _get_container_status(container)
-            status = self._check_proxy_health(session_name, labels, status)
-
-            sessions.append(
-                Session(
-                    name=session_name,
-                    status=status,
-                    workspace=workspace,
-                    created_at=created_at,
-                    backend_type="podman",
-                    container_id=container.get("Id", ""),
-                    volume_name=self._volume_name(session_name),
-                )
-            )
+            sessions.append(self._build_session_from_container(session_name, container))
 
         return sessions
 
@@ -693,39 +718,11 @@ class PodmanBackend:
         Returns:
             Session object or None if not found.
         """
-        container_name = self._container_name(name)
-
-        if not self._runner.container_exists(container_name):
+        container = self._find_container_by_session_name(name)
+        if container is None:
             return None
 
-        # Get container info
-        containers = self._runner.list_containers(label_filter=PAUDE_LABEL_APP)
-        for container in containers:
-            labels = container.get("Labels", {}) or {}
-            if labels.get(PAUDE_LABEL_SESSION) == name:
-                workspace_encoded = labels.get(PAUDE_LABEL_WORKSPACE, "")
-                workspace = (
-                    decode_path(workspace_encoded, url_safe=True)
-                    if workspace_encoded
-                    else Path("/")
-                )
-                created_at = labels.get(PAUDE_LABEL_CREATED, "")
-
-                # Get session status from container state
-                status = _get_container_status(container)
-                status = self._check_proxy_health(name, labels, status)
-
-                return Session(
-                    name=name,
-                    status=status,
-                    workspace=workspace,
-                    created_at=created_at,
-                    backend_type="podman",
-                    container_id=container.get("Id", ""),
-                    volume_name=self._volume_name(name),
-                )
-
-        return None
+        return self._build_session_from_container(name, container)
 
     def find_session_for_workspace(self, workspace: Path) -> Session | None:
         """Find an existing session for a workspace.

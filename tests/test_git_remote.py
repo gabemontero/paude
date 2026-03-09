@@ -4,6 +4,11 @@ from pathlib import Path
 from unittest.mock import patch
 
 from paude.git_remote import (
+    _build_openshift_exec_cmd,
+    _build_podman_exec_cmd,
+    _build_set_origin_cmd,
+    _build_workspace_init_cmd,
+    _exec_in_container,
     build_openshift_remote_url,
     build_podman_remote_url,
     enable_ext_protocol,
@@ -875,6 +880,103 @@ class TestSetupPrecommitInContainerOpenshift:
         result = setup_precommit_in_container_openshift("pod-0", "namespace")
 
         assert result is False
+
+
+class TestBuildPodmanExecCmd:
+    """Tests for _build_podman_exec_cmd."""
+
+    def test_builds_correct_command(self) -> None:
+        """Build correct podman exec command."""
+        result = _build_podman_exec_cmd("my-container", "echo hello")
+        assert result == ["podman", "exec", "my-container", "bash", "-c", "echo hello"]
+
+
+class TestBuildOpenshiftExecCmd:
+    """Tests for _build_openshift_exec_cmd."""
+
+    def test_builds_correct_command_without_context(self) -> None:
+        """Build oc exec command without context."""
+        result = _build_openshift_exec_cmd("pod-0", "ns", None, "echo hello")
+        assert result == [
+            "oc",
+            "exec",
+            "pod-0",
+            "-n",
+            "ns",
+            "--",
+            "bash",
+            "-c",
+            "echo hello",
+        ]
+
+    def test_builds_correct_command_with_context(self) -> None:
+        """Build oc exec command with context."""
+        result = _build_openshift_exec_cmd("pod-0", "ns", "my-ctx", "echo hello")
+        assert result == [
+            "oc",
+            "--context",
+            "my-ctx",
+            "exec",
+            "pod-0",
+            "-n",
+            "ns",
+            "--",
+            "bash",
+            "-c",
+            "echo hello",
+        ]
+
+
+class TestExecInContainer:
+    """Tests for _exec_in_container."""
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_returns_true_on_success(self, mock_run) -> None:
+        """Return True when command succeeds."""
+        mock_run.return_value.returncode = 0
+        result = _exec_in_container(["podman", "exec", "c", "bash", "-c", "true"])
+        assert result is True
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_returns_false_on_failure(self, mock_run) -> None:
+        """Return False when command fails."""
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "error"
+        result = _exec_in_container(["podman", "exec", "c", "bash", "-c", "false"])
+        assert result is False
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_prints_error_msg_on_failure(self, mock_run, capsys) -> None:
+        """Print error message on failure when provided."""
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "some error"
+        _exec_in_container(["cmd"], error_msg="Init failed")
+        captured = capsys.readouterr()
+        assert "Init failed" in captured.err
+        assert "some error" in captured.err
+
+
+class TestBashCommandBuilders:
+    """Tests for bash command builder helpers."""
+
+    def test_build_workspace_init_cmd(self) -> None:
+        """Build workspace init command with branch."""
+        cmd = _build_workspace_init_cmd("main")
+        assert "git init -b main" in cmd
+        assert "receive.denyCurrentBranch updateInstead" in cmd
+        assert "/pvc/workspace" in cmd
+
+    def test_build_set_origin_cmd(self) -> None:
+        """Build set origin command."""
+        cmd = _build_set_origin_cmd("https://github.com/user/repo")
+        assert "remote add origin" in cmd
+        assert "remote set-url origin" in cmd
+        assert "https://github.com/user/repo" in cmd
+
+    def test_build_set_origin_cmd_quotes_url(self) -> None:
+        """Quote URLs with special characters."""
+        cmd = _build_set_origin_cmd("https://example.com/path with spaces")
+        assert "'" in cmd or "\\" in cmd
 
 
 class TestGitFetchFromRemote:

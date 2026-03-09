@@ -220,30 +220,10 @@ def initialize_container_workspace_podman(
     container_name: str,
     branch: str = "main",
 ) -> bool:
-    """Initialize git repository in a Podman container's workspace.
-
-    Args:
-        container_name: Name of the container.
-        branch: Branch name to use for initial branch (matches local).
-
-    Returns:
-        True if successful, False if failed.
-    """
-    quoted_branch = shlex.quote(branch)
-    init_cmd = (
-        f"test -d {CONTAINER_WORKSPACE}/.git || "
-        f"git init -b {quoted_branch} {CONTAINER_WORKSPACE} && "
-        f"git -C {CONTAINER_WORKSPACE} config receive.denyCurrentBranch updateInstead"
-    )
-    result = subprocess.run(
-        ["podman", "exec", container_name, "bash", "-c", init_cmd],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"Failed to init workspace: {result.stderr}", file=sys.stderr)
-        return False
-    return True
+    """Initialize git repository in a Podman container's workspace."""
+    bash_cmd = _build_workspace_init_cmd(branch)
+    exec_cmd = _build_podman_exec_cmd(container_name, bash_cmd)
+    return _exec_in_container(exec_cmd, error_msg="Failed to init workspace")
 
 
 def initialize_container_workspace_openshift(
@@ -252,37 +232,10 @@ def initialize_container_workspace_openshift(
     context: str | None = None,
     branch: str = "main",
 ) -> bool:
-    """Initialize git repository in an OpenShift pod's workspace.
-
-    Args:
-        pod_name: Name of the pod.
-        namespace: Kubernetes namespace.
-        context: Optional kubeconfig context.
-        branch: Branch name to use for initial branch (matches local).
-
-    Returns:
-        True if successful, False if failed.
-    """
-    quoted_branch = shlex.quote(branch)
-    init_cmd = (
-        f"test -d {CONTAINER_WORKSPACE}/.git || "
-        f"git init -b {quoted_branch} {CONTAINER_WORKSPACE} && "
-        f"git -C {CONTAINER_WORKSPACE} config receive.denyCurrentBranch updateInstead"
-    )
-    oc_cmd = ["oc"]
-    if context:
-        oc_cmd.extend(["--context", context])
-    oc_cmd.extend(["exec", pod_name, "-n", namespace, "--", "bash", "-c", init_cmd])
-
-    result = subprocess.run(
-        oc_cmd,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"Failed to init workspace: {result.stderr}", file=sys.stderr)
-        return False
-    return True
+    """Initialize git repository in an OpenShift pod's workspace."""
+    bash_cmd = _build_workspace_init_cmd(branch)
+    exec_cmd = _build_openshift_exec_cmd(pod_name, namespace, context, bash_cmd)
+    return _exec_in_container(exec_cmd, error_msg="Failed to init workspace")
 
 
 def is_container_running_podman(container_name: str) -> bool:
@@ -334,6 +287,62 @@ def is_pod_running_openshift(
     if result.returncode == 0:
         return result.stdout.strip().lower() == "running"
     return False
+
+
+def _build_podman_exec_cmd(container_name: str, bash_cmd: str) -> list[str]:
+    """Build a podman exec command to run a bash command in a container."""
+    return ["podman", "exec", container_name, "bash", "-c", bash_cmd]
+
+
+def _build_openshift_exec_cmd(
+    pod_name: str, namespace: str, context: str | None, bash_cmd: str
+) -> list[str]:
+    """Build an oc exec command to run a bash command in a pod."""
+    cmd = ["oc"]
+    if context:
+        cmd.extend(["--context", context])
+    cmd.extend(["exec", pod_name, "-n", namespace, "--", "bash", "-c", bash_cmd])
+    return cmd
+
+
+def _exec_in_container(exec_cmd: list[str], error_msg: str | None = None) -> bool:
+    """Run a command in a container and return success status."""
+    result = subprocess.run(exec_cmd, capture_output=True, text=True)
+    if result.returncode != 0 and error_msg:
+        print(f"{error_msg}: {result.stderr}", file=sys.stderr)
+    return result.returncode == 0
+
+
+def _build_workspace_init_cmd(branch: str) -> str:
+    """Build bash command to initialize a git workspace."""
+    quoted_branch = shlex.quote(branch)
+    return (
+        f"test -d {CONTAINER_WORKSPACE}/.git || "
+        f"git init -b {quoted_branch} {CONTAINER_WORKSPACE} && "
+        f"git -C {CONTAINER_WORKSPACE} config receive.denyCurrentBranch updateInstead"
+    )
+
+
+def _build_set_origin_cmd(origin_url: str) -> str:
+    """Build bash command to set the origin remote URL."""
+    quoted_url = shlex.quote(origin_url)
+    return (
+        f"git -C {CONTAINER_WORKSPACE} remote add origin {quoted_url} 2>/dev/null || "
+        f"git -C {CONTAINER_WORKSPACE} remote set-url origin {quoted_url}"
+    )
+
+
+_FETCH_TAGS_CMD = f"git -C {CONTAINER_WORKSPACE} fetch origin --tags"
+
+_PRECOMMIT_CMD = (
+    f"test -f {CONTAINER_WORKSPACE}/.pre-commit-config.yaml && "
+    f"cd {CONTAINER_WORKSPACE} && pre-commit install"
+)
+
+_PRECOMMIT_CMD_OPENSHIFT = (
+    f'[[ -z "$HOME" || "$HOME" == "/" ]] && export HOME={CONTAINER_HOME}; '
+    f"{_PRECOMMIT_CMD}"
+)
 
 
 def ssh_url_to_https(url: str) -> str:
@@ -403,31 +412,10 @@ def git_push_tags_to_remote(remote_name: str) -> bool:
 
 
 def set_origin_in_container_podman(container_name: str, origin_url: str) -> bool:
-    """Set the origin remote URL in a Podman container's workspace.
-
-    Idempotent: adds origin if missing, updates URL if it exists.
-
-    Args:
-        container_name: Name of the container.
-        origin_url: URL to set for the origin remote.
-
-    Returns:
-        True if successful, False if failed.
-    """
-    quoted_url = shlex.quote(origin_url)
-    cmd = (
-        f"git -C {CONTAINER_WORKSPACE} remote add origin {quoted_url} 2>/dev/null || "
-        f"git -C {CONTAINER_WORKSPACE} remote set-url origin {quoted_url}"
-    )
-    result = subprocess.run(
-        ["podman", "exec", container_name, "bash", "-c", cmd],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"Failed to set origin in container: {result.stderr}", file=sys.stderr)
-        return False
-    return True
+    """Set the origin remote URL in a Podman container's workspace."""
+    bash_cmd = _build_set_origin_cmd(origin_url)
+    exec_cmd = _build_podman_exec_cmd(container_name, bash_cmd)
+    return _exec_in_container(exec_cmd, error_msg="Failed to set origin in container")
 
 
 def set_origin_in_container_openshift(
@@ -436,62 +424,16 @@ def set_origin_in_container_openshift(
     origin_url: str,
     context: str | None = None,
 ) -> bool:
-    """Set the origin remote URL in an OpenShift pod's workspace.
-
-    Idempotent: adds origin if missing, updates URL if it exists.
-
-    Args:
-        pod_name: Name of the pod.
-        namespace: Kubernetes namespace.
-        origin_url: URL to set for the origin remote.
-        context: Optional kubeconfig context.
-
-    Returns:
-        True if successful, False if failed.
-    """
-    quoted_url = shlex.quote(origin_url)
-    cmd = (
-        f"git -C {CONTAINER_WORKSPACE} remote add origin {quoted_url} 2>/dev/null || "
-        f"git -C {CONTAINER_WORKSPACE} remote set-url origin {quoted_url}"
-    )
-    oc_cmd = ["oc"]
-    if context:
-        oc_cmd.extend(["--context", context])
-    oc_cmd.extend(["exec", pod_name, "-n", namespace, "--", "bash", "-c", cmd])
-
-    result = subprocess.run(
-        oc_cmd,
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        print(f"Failed to set origin in container: {result.stderr}", file=sys.stderr)
-        return False
-    return True
+    """Set the origin remote URL in an OpenShift pod's workspace."""
+    bash_cmd = _build_set_origin_cmd(origin_url)
+    exec_cmd = _build_openshift_exec_cmd(pod_name, namespace, context, bash_cmd)
+    return _exec_in_container(exec_cmd, error_msg="Failed to set origin in container")
 
 
 def fetch_tags_in_container_podman(container_name: str) -> bool:
-    """Fetch tags from origin in a Podman container's workspace.
-
-    Args:
-        container_name: Name of the container.
-
-    Returns:
-        True if successful, False if failed.
-    """
-    result = subprocess.run(
-        [
-            "podman",
-            "exec",
-            container_name,
-            "bash",
-            "-c",
-            f"git -C {CONTAINER_WORKSPACE} fetch origin --tags",
-        ],
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+    """Fetch tags from origin in a Podman container's workspace."""
+    exec_cmd = _build_podman_exec_cmd(container_name, _FETCH_TAGS_CMD)
+    return _exec_in_container(exec_cmd)
 
 
 def fetch_tags_in_container_openshift(
@@ -499,61 +441,15 @@ def fetch_tags_in_container_openshift(
     namespace: str,
     context: str | None = None,
 ) -> bool:
-    """Fetch tags from origin in an OpenShift pod's workspace.
-
-    Args:
-        pod_name: Name of the pod.
-        namespace: Kubernetes namespace.
-        context: Optional kubeconfig context.
-
-    Returns:
-        True if successful, False if failed.
-    """
-    oc_cmd = ["oc"]
-    if context:
-        oc_cmd.extend(["--context", context])
-    oc_cmd.extend(
-        [
-            "exec",
-            pod_name,
-            "-n",
-            namespace,
-            "--",
-            "bash",
-            "-c",
-            f"git -C {CONTAINER_WORKSPACE} fetch origin --tags",
-        ]
-    )
-
-    result = subprocess.run(
-        oc_cmd,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+    """Fetch tags from origin in an OpenShift pod's workspace."""
+    exec_cmd = _build_openshift_exec_cmd(pod_name, namespace, context, _FETCH_TAGS_CMD)
+    return _exec_in_container(exec_cmd)
 
 
 def setup_precommit_in_container_podman(container_name: str) -> bool:
-    """Install pre-commit hooks in a Podman container's workspace.
-
-    Only runs if .pre-commit-config.yaml exists in the workspace.
-
-    Args:
-        container_name: Name of the container.
-
-    Returns:
-        True if successful, False if failed.
-    """
-    cmd = (
-        f"test -f {CONTAINER_WORKSPACE}/.pre-commit-config.yaml && "
-        f"cd {CONTAINER_WORKSPACE} && pre-commit install"
-    )
-    result = subprocess.run(
-        ["podman", "exec", container_name, "bash", "-c", cmd],
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+    """Install pre-commit hooks in a Podman container's workspace."""
+    exec_cmd = _build_podman_exec_cmd(container_name, _PRECOMMIT_CMD)
+    return _exec_in_container(exec_cmd)
 
 
 def setup_precommit_in_container_openshift(
@@ -561,34 +457,11 @@ def setup_precommit_in_container_openshift(
     namespace: str,
     context: str | None = None,
 ) -> bool:
-    """Install pre-commit hooks in an OpenShift pod's workspace.
-
-    Only runs if .pre-commit-config.yaml exists in the workspace.
-
-    Args:
-        pod_name: Name of the pod.
-        namespace: Kubernetes namespace.
-        context: Optional kubeconfig context.
-
-    Returns:
-        True if successful, False if failed.
-    """
-    cmd = (
-        f'[[ -z "$HOME" || "$HOME" == "/" ]] && export HOME={CONTAINER_HOME}; '
-        f"test -f {CONTAINER_WORKSPACE}/.pre-commit-config.yaml && "
-        f"cd {CONTAINER_WORKSPACE} && pre-commit install"
+    """Install pre-commit hooks in an OpenShift pod's workspace."""
+    exec_cmd = _build_openshift_exec_cmd(
+        pod_name, namespace, context, _PRECOMMIT_CMD_OPENSHIFT
     )
-    oc_cmd = ["oc"]
-    if context:
-        oc_cmd.extend(["--context", context])
-    oc_cmd.extend(["exec", pod_name, "-n", namespace, "--", "bash", "-c", cmd])
-
-    result = subprocess.run(
-        oc_cmd,
-        capture_output=True,
-        text=True,
-    )
-    return result.returncode == 0
+    return _exec_in_container(exec_cmd)
 
 
 def git_fetch_from_remote(remote_name: str, cwd: Path | None = None) -> bool:

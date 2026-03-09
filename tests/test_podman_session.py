@@ -18,6 +18,12 @@ from paude.backends.podman import (
     _encode_path,
     _generate_session_name,
 )
+from paude.container.runner import (
+    PAUDE_LABEL_APP,
+    PAUDE_LABEL_CREATED,
+    PAUDE_LABEL_SESSION,
+    PAUDE_LABEL_WORKSPACE,
+)
 
 
 def _make_backend(
@@ -1460,3 +1466,123 @@ class TestProxyRecreation:
         # Should recreate the proxy
         mock_runner.create_session_proxy.assert_called_once()
         mock_runner.start_session_proxy.assert_called_once()
+
+
+class TestFindContainerBySessionName:
+    """Tests for PodmanBackend._find_container_by_session_name."""
+
+    def test_returns_matching_container(self) -> None:
+        """Returns the container dict when session name matches."""
+        mock_runner = MagicMock()
+        encoded_workspace = _encode_path(Path("/home/user/project"))
+        container = {
+            "Id": "abc123",
+            "Labels": {
+                "app": "paude",
+                PAUDE_LABEL_SESSION: "my-session",
+                PAUDE_LABEL_WORKSPACE: encoded_workspace,
+                PAUDE_LABEL_CREATED: "2026-01-01T00:00:00+00:00",
+            },
+            "State": "running",
+        }
+        mock_runner.list_containers.return_value = [container]
+
+        backend = _make_backend(mock_runner)
+        result = backend._find_container_by_session_name("my-session")
+
+        assert result is container
+        mock_runner.list_containers.assert_called_once_with(
+            label_filter=PAUDE_LABEL_APP
+        )
+
+    def test_returns_none_when_not_found(self) -> None:
+        """Returns None when no container has the given session name."""
+        mock_runner = MagicMock()
+        container = {
+            "Id": "abc123",
+            "Labels": {
+                "app": "paude",
+                PAUDE_LABEL_SESSION: "other-session",
+            },
+            "State": "running",
+        }
+        mock_runner.list_containers.return_value = [container]
+
+        backend = _make_backend(mock_runner)
+        result = backend._find_container_by_session_name("my-session")
+
+        assert result is None
+
+
+class TestBuildSessionFromContainer:
+    """Tests for PodmanBackend._build_session_from_container."""
+
+    def test_constructs_session_correctly(self) -> None:
+        """Builds a Session with correct fields from container dict."""
+        mock_runner = MagicMock()
+        encoded_workspace = _encode_path(Path("/home/user/project"))
+        container = {
+            "Id": "abc123",
+            "Labels": {
+                "app": "paude",
+                PAUDE_LABEL_SESSION: "my-session",
+                PAUDE_LABEL_WORKSPACE: encoded_workspace,
+                PAUDE_LABEL_CREATED: "2026-01-01T00:00:00+00:00",
+            },
+            "State": "running",
+        }
+        mock_runner.container_exists.return_value = False
+
+        backend = _make_backend(mock_runner)
+        session = backend._build_session_from_container("my-session", container)
+
+        assert session.name == "my-session"
+        assert session.workspace == Path("/home/user/project")
+        assert session.created_at == "2026-01-01T00:00:00+00:00"
+        assert session.status == "running"
+        assert session.backend_type == "podman"
+        assert session.container_id == "abc123"
+        assert session.volume_name == "paude-my-session-workspace"
+
+    def test_handles_missing_workspace_label(self) -> None:
+        """Falls back to Path('/') when workspace label is missing."""
+        mock_runner = MagicMock()
+        container = {
+            "Id": "def456",
+            "Labels": {
+                "app": "paude",
+                PAUDE_LABEL_SESSION: "my-session",
+                PAUDE_LABEL_CREATED: "2026-01-01T00:00:00+00:00",
+            },
+            "State": "exited",
+        }
+        mock_runner.container_exists.return_value = False
+
+        backend = _make_backend(mock_runner)
+        session = backend._build_session_from_container("my-session", container)
+
+        assert session.workspace == Path("/")
+        assert session.status == "stopped"
+
+    def test_includes_proxy_health_check(self) -> None:
+        """Status is degraded when proxy is expected but missing."""
+        mock_runner = MagicMock()
+        encoded_workspace = _encode_path(Path("/home/user/project"))
+        container = {
+            "Id": "abc123",
+            "Labels": {
+                "app": "paude",
+                PAUDE_LABEL_SESSION: "my-session",
+                PAUDE_LABEL_WORKSPACE: encoded_workspace,
+                PAUDE_LABEL_CREATED: "2026-01-01T00:00:00+00:00",
+                PAUDE_LABEL_DOMAINS: "example.com",
+            },
+            "State": "running",
+        }
+        # Proxy container does not exist
+        mock_runner.container_exists.return_value = False
+
+        backend = _make_backend(mock_runner)
+        session = backend._build_session_from_container("my-session", container)
+
+        assert session.status == "degraded"
