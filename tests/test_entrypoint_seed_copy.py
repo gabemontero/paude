@@ -122,9 +122,8 @@ class TestEntrypointContract:
         cp_pos = content.find("cp -a /tmp/claude.seed/.")
         assert cp_pos != -1, "Missing cp -a command for /tmp/claude.seed"
         # Find the mv that comes after this specific cp -a
-        mv_pos = content.find(
-            'mv "$HOME/.claude/claude.json" "$HOME/.claude.json"', cp_pos
-        )
+        # Uses parameterized paths via $AGENT_CONFIG_DIR and $AGENT_CONFIG_FILE
+        mv_pos = content.find("claude.json", cp_pos + 1)
         assert mv_pos != -1, "Missing mv command for claude.json after cp -a"
         assert mv_pos > cp_pos, "mv must come after cp -a"
 

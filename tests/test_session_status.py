@@ -230,15 +230,16 @@ class TestFormatWorkSummary:
 
 
 class TestCombinedQueryCmd:
-    """Tests for _COMBINED_QUERY_CMD."""
+    """Tests for _build_combined_query_cmd."""
 
     def test_uses_base_ref_with_fallback(self) -> None:
         from paude.constants import BASE_REF_NAME
-        from paude.session_status import _COMBINED_QUERY_CMD
+        from paude.session_status import _build_combined_query_cmd
 
-        assert BASE_REF_NAME in _COMBINED_QUERY_CMD
-        assert "origin/main" in _COMBINED_QUERY_CMD
-        assert "$BASE_REF..HEAD" in _COMBINED_QUERY_CMD
+        cmd = _build_combined_query_cmd()
+        assert BASE_REF_NAME in cmd
+        assert "origin/main" in cmd
+        assert "$BASE_REF..HEAD" in cmd
 
 
 class TestGetSessionEnrichment:

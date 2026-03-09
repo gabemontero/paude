@@ -31,7 +31,12 @@ from paude.backends.openshift.resources import (
     _generate_session_name,
 )
 from paude.backends.openshift.sync import ConfigSyncer
-from paude.backends.shared import SQUID_BLOCKED_LOG_PATH, decode_path
+from paude.backends.shared import (
+    PAUDE_LABEL_AGENT,
+    SQUID_BLOCKED_LOG_PATH,
+    build_agent_env,
+    decode_path,
+)
 
 
 class OpenShiftBackend:
@@ -430,6 +435,7 @@ class OpenShiftBackend:
         workspace: Path,
         pvc_size: str = "10Gi",
         storage_class: str | None = None,
+        agent: str = "claude",
     ) -> dict[str, Any]:
         """Generate a Kubernetes StatefulSet specification for persistent sessions.
 
@@ -442,6 +448,7 @@ class OpenShiftBackend:
             workspace: Local workspace path (for annotation).
             pvc_size: Size of the PVC (e.g., "10Gi").
             storage_class: Storage class name (None for default).
+            agent: Agent name (e.g., "claude").
 
         Returns:
             StatefulSet spec as a dictionary.
@@ -452,6 +459,7 @@ class OpenShiftBackend:
                 namespace=self.namespace,
                 image=image,
                 resources=self._config.resources,
+                agent=agent,
             )
             .with_env(env)
             .with_workspace(workspace)
@@ -621,12 +629,20 @@ class OpenShiftBackend:
             self._ensure_network_policy_permissive(session_name)
 
         # Build environment variables
+        from paude.agents import get_agent
+
+        agent = get_agent(config.agent)
         session_env = dict(config.env)
-        claude_args = list(config.args)
-        if config.yolo:
-            claude_args = ["--dangerously-skip-permissions"] + claude_args
-        if claude_args:
-            session_env["PAUDE_CLAUDE_ARGS"] = " ".join(claude_args)
+        session_env.update(build_agent_env(agent.config))
+
+        agent_args = list(config.args)
+        if config.yolo and agent.config.yolo_flag:
+            agent_args = [agent.config.yolo_flag] + agent_args
+        if agent_args:
+            session_env[agent.config.args_env_var] = " ".join(agent_args)
+        # Backward compat: also set PAUDE_CLAUDE_ARGS for existing containers
+        if agent_args and agent.config.name == "claude":
+            session_env["PAUDE_CLAUDE_ARGS"] = " ".join(agent_args)
 
         # Add proxy env vars and suppress prompts when egress filtering is active
         if config.allowed_domains is not None:
@@ -652,6 +668,7 @@ class OpenShiftBackend:
             workspace=config.workspace,
             pvc_size=config.pvc_size,
             storage_class=config.storage_class,
+            agent=config.agent,
         )
 
         print(
@@ -689,6 +706,7 @@ class OpenShiftBackend:
             backend_type="openshift",
             container_id=f"paude-{session_name}-0",
             volume_name=f"workspace-paude-{session_name}-0",
+            agent=config.agent,
         )
 
     def delete_session(self, name: str, confirm: bool = False) -> None:
@@ -997,6 +1015,7 @@ class OpenShiftBackend:
             return None
 
         metadata = sts.get("metadata", {})
+        labels = metadata.get("labels", {})
         annotations = metadata.get("annotations", {})
         spec = sts.get("spec", {})
 
@@ -1030,6 +1049,7 @@ class OpenShiftBackend:
             backend_type="openshift",
             container_id=f"paude-{name}-0",
             volume_name=f"workspace-paude-{name}-0",
+            agent=labels.get(PAUDE_LABEL_AGENT, "claude"),
         )
 
     def find_session_for_workspace(self, workspace: Path) -> Session | None:
@@ -1335,6 +1355,7 @@ class OpenShiftBackend:
                             backend_type="openshift",
                             container_id=f"paude-{session_name}-0",
                             volume_name=f"workspace-paude-{session_name}-0",
+                            agent=labels.get(PAUDE_LABEL_AGENT, "claude"),
                         )
                     )
             except json.JSONDecodeError:

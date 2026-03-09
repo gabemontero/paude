@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from paude.config.models import PaudeConfig
 from paude.constants import CONTAINER_ENTRYPOINT, CONTAINER_HOME
 
+if TYPE_CHECKING:
+    from paude.agents.base import Agent
+
 
 def generate_pip_install_dockerfile(
-    config: PaudeConfig, include_claude_install: bool = False
+    config: PaudeConfig,
+    include_claude_install: bool = False,
+    agent: Agent | None = None,
 ) -> str:
     """Generate a minimal Dockerfile that layers on a paude base image.
 
@@ -29,26 +36,19 @@ def generate_pip_install_dockerfile(
     lines.append("FROM ${BASE_IMAGE}")
 
     if include_claude_install:
+        if agent is None:
+            from paude.agents import get_agent
+
+            agent = get_agent("claude")
+
         # Switch to root first in case base image ends with non-root user
         # This ensures any feature injection (done before USER paude) runs as root
         lines.append("")
         lines.append("# Ensure root for any feature installation")
         lines.append("USER root")
-        lines.append("")
-        lines.append("# Install Claude Code (as paude user)")
-        lines.append("USER paude")
-        lines.append(f"WORKDIR {CONTAINER_HOME}")
-        lines.append("RUN curl -fsSL https://claude.ai/install.sh | bash")
-        lines.append("")
-        lines.append("# Disable auto-updates (version controlled by image rebuild)")
-        lines.append("ENV DISABLE_AUTOUPDATER=1")
-        lines.append("")
-        lines.append("# Ensure claude is in PATH")
-        lines.append(f'ENV PATH="{CONTAINER_HOME}/.local/bin:$PATH"')
-        lines.append("")
-        lines.append("# Fix permissions for OpenShift arbitrary UID compatibility")
-        lines.append("USER root")
-        lines.append(f"RUN chmod -R g+rwX {CONTAINER_HOME}")
+
+        lines.extend(agent.dockerfile_install_lines(CONTAINER_HOME))
+
         lines.append("")
         lines.append("# Switch back to paude user for runtime")
         lines.append("USER paude")
@@ -67,7 +67,10 @@ def generate_pip_install_dockerfile(
     return "\n".join(lines)
 
 
-def generate_workspace_dockerfile(config: PaudeConfig) -> str:
+def generate_workspace_dockerfile(
+    config: PaudeConfig,
+    agent: Agent | None = None,
+) -> str:
     """Generate a Dockerfile that wraps the user's base image with paude requirements.
 
     This output matches the bash generate_workspace_dockerfile() function exactly.
@@ -148,26 +151,20 @@ RUN if command -v apt-get >/dev/null 2>&1; then \\
     lines.append(
         "# OpenShift runs containers with arbitrary UIDs but GID 0, so home must be group-writable"
     )
+    if agent is None:
+        from paude.agents import get_agent
+
+        agent = get_agent("claude")
+
+    config_dir = agent.config.config_dir_name
     lines.append(
         "RUN (id paude >/dev/null 2>&1 || useradd -m -s /bin/bash -g 0 paude 2>/dev/null || adduser -D -s /bin/bash -G root paude) && "
         f"chmod -R g+rwX {CONTAINER_HOME} && "
-        f"mkdir -p {CONTAINER_HOME}/.claude {CONTAINER_HOME}/.config && "
-        f"chmod -R g+rwX {CONTAINER_HOME}/.claude {CONTAINER_HOME}/.config"
+        f"mkdir -p {CONTAINER_HOME}/{config_dir} {CONTAINER_HOME}/.config && "
+        f"chmod -R g+rwX {CONTAINER_HOME}/{config_dir} {CONTAINER_HOME}/.config"
     )
 
-    lines.append("")
-    lines.append("# Install Claude Code using native installer (as paude user)")
-    lines.append("USER paude")
-    lines.append(f"WORKDIR {CONTAINER_HOME}")
-    lines.append("RUN curl -fsSL https://claude.ai/install.sh | bash")
-
-    lines.append("")
-    lines.append("# Disable auto-updates (version controlled by image rebuild)")
-    lines.append("ENV DISABLE_AUTOUPDATER=1")
-
-    lines.append("")
-    lines.append("# Ensure claude is in PATH")
-    lines.append(f'ENV PATH="{CONTAINER_HOME}/.local/bin:$PATH"')
+    lines.extend(agent.dockerfile_install_lines(CONTAINER_HOME))
 
     lines.append("")
     lines.append("# Copy entrypoints (requires root)")

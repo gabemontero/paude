@@ -7,6 +7,7 @@ import sys
 import tempfile
 from pathlib import Path
 
+from paude.agents import get_agent
 from paude.backends.openshift.exceptions import OcTimeoutError, OpenShiftError
 from paude.backends.openshift.oc import (
     OC_EXEC_TIMEOUT,
@@ -14,7 +15,6 @@ from paude.backends.openshift.oc import (
     RSYNC_TIMEOUT,
     OcClient,
 )
-from paude.backends.openshift.resources import CLAUDE_EXCLUDES
 from paude.constants import CONTAINER_HOME, GCP_ADC_FILENAME
 
 
@@ -263,27 +263,33 @@ class ConfigSyncer:
                 except Exception:  # noqa: S110
                     pass
 
-    def _sync_claude_config(
+    def _sync_agent_config(
         self,
         pod_name: str,
         verbose: bool = False,
+        agent_name: str = "claude",
     ) -> bool:
-        """Sync Claude config directory to the pod.
+        """Sync agent config directory to the pod.
 
         Returns True if sync succeeded.
         """
         home = Path.home()
         config_path = "/credentials"
-        claude_dir = home / ".claude"
-        claude_json = home / ".claude.json"
+        agent = get_agent(agent_name)
+        config_dir = home / agent.config.config_dir_name
+        config_file = (
+            home / agent.config.config_file_name
+            if agent.config.config_file_name
+            else None
+        )
 
-        if claude_dir.is_dir():
+        if config_dir.is_dir():
             exclude_args = []
-            for pattern in CLAUDE_EXCLUDES:
+            for pattern in agent.config.config_excludes:
                 exclude_args.extend(["--exclude", pattern])
 
             rsync_success = self.rsync_with_retry(
-                f"{claude_dir}/",
+                f"{config_dir}/",
                 f"{pod_name}:{config_path}/claude",
                 exclude_args,
                 verbose=verbose,
@@ -292,20 +298,25 @@ class ConfigSyncer:
             if rsync_success:
                 self._rewrite_plugin_paths(pod_name, config_path)
                 if verbose:
-                    print("  Synced ~/.claude/ (including plugins)", file=sys.stderr)
+                    cfg_dir = agent.config.config_dir_name
+                    print(
+                        f"  Synced ~/{cfg_dir}/ (including plugins)",
+                        file=sys.stderr,
+                    )
             else:
+                cfg_dir = agent.config.config_dir_name
                 print(
-                    "  Warning: Failed to sync ~/.claude/ - plugins may not work",
+                    f"  Warning: Failed to sync ~/{cfg_dir}/ - plugins may not work",
                     file=sys.stderr,
                 )
                 return False
 
-        if claude_json.exists():
+        if config_file and config_file.exists():
             try:
                 dest = f"{pod_name}:{config_path}/claude/claude.json"
                 self._oc.run(
                     "cp",
-                    str(claude_json),
+                    str(config_file),
                     dest,
                     "-n",
                     self._namespace,
@@ -416,7 +427,7 @@ class ConfigSyncer:
 
         self._prepare_config_directory(pod_name)
         self._sync_gcloud_credentials(pod_name)
-        self._sync_claude_config(pod_name, verbose=verbose)
+        self._sync_agent_config(pod_name, verbose=verbose)
         self._sync_gitconfig(pod_name, verbose=verbose)
         self._sync_global_gitignore(pod_name, verbose=verbose)
         self._sync_github_token(pod_name, github_token)

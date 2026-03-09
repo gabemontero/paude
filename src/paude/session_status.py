@@ -26,23 +26,27 @@ class WorkSummary:
     changed_files: list[str] = field(default_factory=list)
 
 
-_COMBINED_QUERY_CMD = (
-    "tmux list-windows -t claude"
-    " -F '#{window_activity}' 2>/dev/null; true"
-    f" && cd {CONTAINER_WORKSPACE}"
-    f" && BASE_REF=$(git rev-parse --verify {BASE_REF_NAME} 2>/dev/null"
-    f" && echo {BASE_REF_NAME} || echo origin/main)"
-    ' && echo "BRANCH:$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"'
-    ' && echo "AHEAD:$(git rev-list --count $BASE_REF..HEAD 2>/dev/null)"'
-    ' && echo "SUBJECT:$(git log --oneline -1'
-    ' --format=%s $BASE_REF..HEAD 2>/dev/null)"'
-    ' && echo "CHANGED:$(git diff --name-only HEAD 2>/dev/null'
-    " | head -5 | sed 's|.*/||' | paste -sd,)\""
-)
+def _build_combined_query_cmd(session_name: str = "claude") -> str:
+    """Build the combined tmux+git query command."""
+    return (
+        f"tmux list-windows -t {session_name}"
+        " -F '#{window_activity}' 2>/dev/null; true"
+        f" && cd {CONTAINER_WORKSPACE}"
+        f" && BASE_REF=$(git rev-parse --verify {BASE_REF_NAME} 2>/dev/null"
+        f" && echo {BASE_REF_NAME} || echo origin/main)"
+        ' && echo "BRANCH:$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"'
+        ' && echo "AHEAD:$(git rev-list --count $BASE_REF..HEAD 2>/dev/null)"'
+        ' && echo "SUBJECT:$(git log --oneline -1'
+        ' --format=%s $BASE_REF..HEAD 2>/dev/null)"'
+        ' && echo "CHANGED:$(git diff --name-only HEAD 2>/dev/null'
+        " | head -5 | sed 's|.*/||' | paste -sd,)\""
+    )
 
 
 def get_session_enrichment(
-    backend: Backend, session_name: str
+    backend: Backend,
+    session_name: str,
+    agent_name: str = "claude",
 ) -> tuple[SessionActivity, WorkSummary | None]:
     """Query tmux and git state in a single exec call.
 
@@ -52,11 +56,16 @@ def get_session_enrichment(
     Args:
         backend: Backend instance with exec_in_session method.
         session_name: Session name.
+        agent_name: Agent name for tmux session lookup.
 
     Returns:
         Tuple of (SessionActivity, WorkSummary or None).
     """
-    rc, output, _ = backend.exec_in_session(session_name, _COMBINED_QUERY_CMD)
+    from paude.agents import get_agent
+
+    agent = get_agent(agent_name)
+    cmd = _build_combined_query_cmd(agent.config.session_name)
+    rc, output, _ = backend.exec_in_session(session_name, cmd)
 
     lines = output.strip().splitlines() if rc == 0 else []
 
@@ -196,22 +205,34 @@ class SessionActivity:
     elapsed_seconds: int | None = None
 
 
-_TMUX_QUERY_CMD = (
-    "tmux list-windows -t claude -F '#{window_activity}' 2>/dev/null; true"
-)
+def _build_tmux_query_cmd(session_name: str = "claude") -> str:
+    """Build the tmux activity query command."""
+    return (
+        f"tmux list-windows -t {session_name}"
+        " -F '#{window_activity}' 2>/dev/null; true"
+    )
 
 
-def get_session_activity(backend: Backend, session_name: str) -> SessionActivity:
+def get_session_activity(
+    backend: Backend,
+    session_name: str,
+    agent_name: str = "claude",
+) -> SessionActivity:
     """Query tmux state in a running session.
 
     Args:
         backend: Backend instance with exec_in_session method.
         session_name: Session name.
+        agent_name: Agent name for tmux session lookup.
 
     Returns:
         SessionActivity with parsed state and timing.
     """
-    rc, output, _ = backend.exec_in_session(session_name, _TMUX_QUERY_CMD)
+    from paude.agents import get_agent
+
+    agent = get_agent(agent_name)
+    cmd = _build_tmux_query_cmd(agent.config.session_name)
+    rc, output, _ = backend.exec_in_session(session_name, cmd)
 
     activity_ts = output.strip() if rc == 0 else ""
     return parse_activity(activity_ts)

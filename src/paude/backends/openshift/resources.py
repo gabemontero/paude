@@ -8,25 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from paude.backends.shared import encode_path
+from paude.backends.shared import PAUDE_LABEL_AGENT, encode_path
 from paude.constants import CONTAINER_WORKSPACE
-
-CLAUDE_EXCLUDES = [
-    # Session-specific files (not useful on remote)
-    "/debug",  # Debug logs - session specific
-    "/file-history",  # File history - session specific
-    "/history.jsonl",  # Command history - session specific
-    "/paste-cache",  # Paste cache - session specific
-    "/session-env",  # Session environment - session specific
-    "/shell-snapshots",  # Shell snapshots - session specific
-    "/stats-cache.json",  # Stats cache - session specific
-    "/tasks",  # Task state - session specific
-    "/todos",  # Todo state - session specific
-    "/projects",  # Project state - may contain session data
-    # Leading / anchors to root - only matches top-level, not nested dirs
-    "/cache",  # General cache (NOT plugins/cache with plugin files)
-    "/.git",  # Git metadata (if user has versioned ~/.claude)
-]
 
 
 def _generate_session_name(workspace: Path) -> str:
@@ -63,6 +46,7 @@ class StatefulSetBuilder:
         namespace: str,
         image: str,
         resources: dict[str, dict[str, str]],
+        agent: str = "claude",
     ) -> None:
         """Initialize the StatefulSet builder.
 
@@ -71,11 +55,13 @@ class StatefulSetBuilder:
             namespace: Kubernetes namespace.
             image: Container image to use.
             resources: Resource requests/limits for the container.
+            agent: Agent name (e.g., "claude").
         """
         self._session_name = session_name
         self._namespace = namespace
         self._image = image
         self._resources = resources
+        self._agent = agent
         self._env: dict[str, str] = {}
         self._workspace: Path | None = None
         self._pvc_size = "10Gi"
@@ -132,6 +118,7 @@ class StatefulSetBuilder:
             "labels": {
                 "app": "paude",
                 "paude.io/session-name": self._session_name,
+                PAUDE_LABEL_AGENT: self._agent,
             },
             "annotations": {
                 "paude.io/created-at": created_at,

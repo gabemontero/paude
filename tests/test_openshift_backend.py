@@ -2641,7 +2641,7 @@ class TestSyncConfigWithPlugins:
     def test_sync_config_uses_rsync_with_excludes(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod uses rsync with CLAUDE_EXCLUDES for ~/.claude/."""
+        """_sync_config_to_pod uses rsync with config excludes for ~/.claude/."""
         # Create mock claude directory
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
@@ -2890,43 +2890,49 @@ class TestRewritePluginPaths:
         assert "if .value.installLocation then" in all_calls_str
 
 
-class TestClaudeExcludes:
-    """Tests for CLAUDE_EXCLUDES constant."""
+class TestClaudeConfigExcludes:
+    """Tests for ClaudeAgent config_excludes (canonical source of truth)."""
 
-    def test_claude_excludes_contains_expected_patterns(self) -> None:
-        """CLAUDE_EXCLUDES contains session-specific and cache patterns."""
-        from paude.backends.openshift import CLAUDE_EXCLUDES
+    def test_config_excludes_contains_expected_patterns(self) -> None:
+        """config_excludes contains session-specific and cache patterns."""
+        from paude.agents.claude import ClaudeAgent
+
+        excludes = ClaudeAgent().config.config_excludes
 
         # Session-specific patterns (anchored with leading /)
-        assert "/history.jsonl" in CLAUDE_EXCLUDES
-        assert "/tasks" in CLAUDE_EXCLUDES
-        assert "/todos" in CLAUDE_EXCLUDES
-        assert "/session-env" in CLAUDE_EXCLUDES
+        assert "/history.jsonl" in excludes
+        assert "/tasks" in excludes
+        assert "/todos" in excludes
+        assert "/session-env" in excludes
 
         # Cache patterns (anchored to only match top-level cache)
-        assert "/cache" in CLAUDE_EXCLUDES
-        assert "/stats-cache.json" in CLAUDE_EXCLUDES
+        assert "/cache" in excludes
+        assert "/stats-cache.json" in excludes
 
         # Git metadata
-        assert "/.git" in CLAUDE_EXCLUDES
+        assert "/.git" in excludes
 
-    def test_claude_excludes_uses_anchored_patterns(self) -> None:
-        """CLAUDE_EXCLUDES uses anchored patterns to not exclude plugins/cache."""
-        from paude.backends.openshift import CLAUDE_EXCLUDES
+    def test_config_excludes_uses_anchored_patterns(self) -> None:
+        """config_excludes uses anchored patterns to not exclude plugins/cache."""
+        from paude.agents.claude import ClaudeAgent
+
+        excludes = ClaudeAgent().config.config_excludes
 
         # All patterns should be anchored (start with /) to prevent
         # accidentally excluding nested directories like plugins/cache
-        for pattern in CLAUDE_EXCLUDES:
+        for pattern in excludes:
             assert pattern.startswith("/"), (
                 f"Pattern '{pattern}' should be anchored with leading / "
                 "to prevent excluding nested directories"
             )
 
-    def test_claude_excludes_does_not_contain_plugins(self) -> None:
-        """CLAUDE_EXCLUDES does not exclude plugins directory."""
-        from paude.backends.openshift import CLAUDE_EXCLUDES
+    def test_config_excludes_does_not_contain_plugins(self) -> None:
+        """config_excludes does not exclude plugins directory."""
+        from paude.agents.claude import ClaudeAgent
 
-        assert "plugins" not in CLAUDE_EXCLUDES
+        excludes = ClaudeAgent().config.config_excludes
+
+        assert "plugins" not in excludes
 
 
 class TestEnsureProxyImageViaBuild:

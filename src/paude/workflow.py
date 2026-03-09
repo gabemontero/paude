@@ -284,7 +284,9 @@ def status_sessions(
         activity: SessionActivity | None = None
         summary: WorkSummary | None = None
         try:
-            activity, summary = get_session_enrichment(backend, session.name)
+            activity, summary = get_session_enrichment(
+                backend, session.name, agent_name=session.agent
+            )
         except Exception:  # noqa: S110
             pass
 
@@ -368,19 +370,31 @@ def reset_session(
         raise typer.Exit(1)
 
     if not keep_conversation:
-        typer.echo("Clearing conversation history and sending /clear...", err=True)
+        from paude.agents import get_agent
+
+        agent = get_agent(session.agent)
+        agent_cfg = agent.config
+        config_dir = f"{CONTAINER_HOME}/{agent_cfg.config_dir_name}"
+
+        typer.echo(
+            "Clearing conversation history and sending clear command...",
+            err=True,
+        )
         # Delete conversation history but preserve per-project settings
-        # (settings.local.json, CLAUDE.md), then send /clear to Claude
-        claude_dir = f"{CONTAINER_HOME}/.claude"
+        # (settings.local.json, CLAUDE.md), then send clear command to agent
         clear_cmd = (
-            f"find {claude_dir}/projects/ "
+            f"find {config_dir}/projects/ "
             r"\( -name '*.jsonl' -o -name 'sessions-index.json' \) "
             "-delete 2>/dev/null; "
-            f"find {claude_dir}/projects/ -mindepth 2 -maxdepth 2 -type d "
+            f"find {config_dir}/projects/ -mindepth 2 -maxdepth 2 -type d "
             "-exec rm -rf {} + 2>/dev/null; "
-            f"rm -rf {claude_dir}/todos/; "
-            'tmux send-keys -t claude "/clear" Enter'
+            f"rm -rf {config_dir}/todos/; "
         )
+        if agent_cfg.clear_command:
+            clear_cmd += (
+                f"tmux send-keys -t {agent_cfg.session_name}"
+                f' "{agent_cfg.clear_command}" Enter'
+            )
         backend.exec_in_session(session_name, clear_cmd)
 
     typer.echo(f"Session '{session_name}' reset to '{branch}'.", err=True)

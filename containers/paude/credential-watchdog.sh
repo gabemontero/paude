@@ -30,12 +30,13 @@ fi
 INACTIVITY_THRESHOLD=$((TIMEOUT_MINUTES * 60))
 
 has_tmux_clients() {
-    # Check if a REMOTE client is attached to the claude session
+    # Check if a REMOTE client is attached to the agent session
     # PID 1 is always attached (container's main process runs "tmux attach")
     # Remote clients via "paude connect" / "oc exec" add additional clients
     local client_count
+    local session_name="${PAUDE_AGENT_SESSION_NAME:-claude}"
 
-    client_count=$(tmux list-clients -t claude 2>/dev/null | wc -l)
+    client_count=$(tmux list-clients -t "$session_name" 2>/dev/null | wc -l)
 
     if [[ "$client_count" -gt 1 ]]; then
         echo "[watchdog] Remote client connected ($client_count clients total)" >&2
@@ -46,12 +47,13 @@ has_tmux_clients() {
     return 1
 }
 
-has_active_claude_process() {
-    # Check if claude process is actively using CPU (indicates work in progress)
+has_active_agent_process() {
+    # Check if agent process is actively using CPU (indicates work in progress)
     local pid cpu cpu_int
-    pid=$(pgrep -x claude 2>/dev/null | head -1)
+    local process_name="${PAUDE_AGENT_PROCESS:-claude}"
+    pid=$(pgrep -x "$process_name" 2>/dev/null | head -1)
     if [[ -z "$pid" ]]; then
-        echo "[watchdog] No claude process found" >&2
+        echo "[watchdog] No agent process found" >&2
         return 1
     fi
     cpu=$(ps -o %cpu= -p "$pid" 2>/dev/null | tr -d ' ')
@@ -62,14 +64,15 @@ has_active_claude_process() {
     # Compare integer part only (bash doesn't do float comparison)
     cpu_int="${cpu%.*}"
     cpu_int="${cpu_int:-0}"  # Default to 0 if empty (e.g., ".5" becomes "")
-    echo "[watchdog] Claude pid=$pid cpu=$cpu cpu_int=$cpu_int threshold=$CPU_THRESHOLD" >&2
+    echo "[watchdog] Agent pid=$pid cpu=$cpu cpu_int=$cpu_int threshold=$CPU_THRESHOLD" >&2
     [[ "$cpu_int" -ge "$CPU_THRESHOLD" ]]
 }
 
 get_last_file_activity() {
     # Get the most recent modification time of activity-indicating files
     local newest=0 mtime
-    for file in "$HOME/.claude/history.jsonl" "$HOME/.claude/debug/"*; do
+    local config_dir="${PAUDE_AGENT_CONFIG_DIR:-.claude}"
+    for file in "$HOME/$config_dir/history.jsonl" "$HOME/$config_dir/debug/"*; do
         if [[ -f "$file" ]]; then
             mtime=$(stat -c %Y "$file" 2>/dev/null) || continue
             if [[ "$mtime" -gt "$newest" ]]; then
@@ -103,8 +106,8 @@ while true; do
         continue
     fi
 
-    if has_active_claude_process; then
-        echo "[watchdog] Claude is active (CPU >= ${CPU_THRESHOLD}%), resetting timer" >&2
+    if has_active_agent_process; then
+        echo "[watchdog] Agent is active (CPU >= ${CPU_THRESHOLD}%), resetting timer" >&2
         last_activity=$(date +%s)
         continue
     fi

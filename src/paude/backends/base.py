@@ -30,6 +30,7 @@ class Session:
     backend_type: str
     container_id: str | None = None
     volume_name: str | None = None
+    agent: str = "claude"
 
 
 @dataclass
@@ -66,6 +67,7 @@ class SessionConfig:
     proxy_image: str | None = None
     credential_timeout: int = 60  # minutes of inactivity before credential removal
     wait_for_ready: bool = True
+    agent: str = "claude"
 
 
 class Backend(Protocol):

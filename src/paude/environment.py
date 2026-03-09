@@ -2,37 +2,22 @@
 
 from __future__ import annotations
 
-import os
 
-
-def build_environment() -> dict[str, str]:
+def build_environment(agent_name: str = "claude") -> dict[str, str]:
     """Build the environment variables to pass to the container.
 
-    Passes through Vertex AI related environment variables.
+    Delegates to the agent's build_environment() method.
+
+    Args:
+        agent_name: Agent name to use for environment building.
 
     Returns:
         Dictionary of environment variables.
     """
-    env: dict[str, str] = {}
+    from paude.agents import get_agent
 
-    # Vertex AI / Google Cloud variables
-    passthrough_vars = [
-        "CLAUDE_CODE_USE_VERTEX",
-        "ANTHROPIC_VERTEX_PROJECT_ID",
-        "GOOGLE_CLOUD_PROJECT",
-    ]
-
-    for var in passthrough_vars:
-        value = os.environ.get(var)
-        if value:
-            env[var] = value
-
-    # CLOUDSDK_AUTH_* variables
-    for key, value in os.environ.items():
-        if key.startswith("CLOUDSDK_AUTH_"):
-            env[key] = value
-
-    return env
+    agent = get_agent(agent_name)
+    return agent.build_environment()
 
 
 def build_proxy_environment(proxy_name: str) -> dict[str, str]:

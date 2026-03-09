@@ -4,8 +4,28 @@ from __future__ import annotations
 
 import base64
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+if TYPE_CHECKING:
+    from paude.agents.base import AgentConfig
+
+PAUDE_LABEL_AGENT = "paude.io/agent"
 SQUID_BLOCKED_LOG_PATH = "/tmp/squid-blocked.log"  # noqa: S108
+
+
+def build_agent_env(config: AgentConfig) -> dict[str, str]:
+    """Build agent env vars for container entrypoint parameterization."""
+    env: dict[str, str] = {
+        "PAUDE_AGENT_NAME": config.name,
+        "PAUDE_AGENT_PROCESS": config.process_name,
+        "PAUDE_AGENT_CONFIG_DIR": config.config_dir_name,
+        "PAUDE_AGENT_INSTALL_SCRIPT": config.install_script,
+        "PAUDE_AGENT_SESSION_NAME": config.session_name,
+        "PAUDE_AGENT_LAUNCH_CMD": config.process_name,
+    }
+    if config.config_file_name:
+        env["PAUDE_AGENT_CONFIG_FILE"] = config.config_file_name
+    return env
 
 
 def encode_path(path: Path, *, url_safe: bool = False) -> str:

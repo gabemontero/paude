@@ -150,8 +150,8 @@ def _detect_dev_script_dir() -> Path | None:
     return None
 
 
-def _parse_claude_args(claude_args: str | None) -> list[str]:
-    """Parse claude_args string into a list using shlex."""
+def _parse_agent_args(claude_args: str | None) -> list[str]:
+    """Parse agent args string into a list using shlex."""
     import shlex
 
     if not claude_args:
@@ -161,6 +161,10 @@ def _parse_claude_args(claude_args: str | None) -> list[str]:
     except ValueError as e:
         typer.echo(f"Error parsing --args: {e}", err=True)
         raise typer.Exit(1) from None
+
+
+# Backward-compat alias
+_parse_claude_args = _parse_agent_args
 
 
 def _expand_allowed_domains(
@@ -178,19 +182,21 @@ def _prepare_session_create(
     yolo: bool,
     claude_args: str | None,
     config_obj: PaudeConfig | None,
+    agent_name: str = "claude",
 ) -> tuple[list[str] | None, list[str], dict[str, str], bool]:
     """Shared pre-create logic for both backends.
 
     Returns:
         Tuple of (expanded_domains, parsed_args, env, unrestricted).
     """
+    from paude.agents import get_agent
     from paude.domains import is_unrestricted
-    from paude.environment import build_environment
 
-    parsed_args = _parse_claude_args(claude_args)
+    parsed_args = _parse_agent_args(claude_args)
 
-    # Build environment
-    env = build_environment()
+    # Build environment from agent
+    agent_instance = get_agent(agent_name)
+    env = agent_instance.build_environment()
     if config_obj and config_obj.container_env:
         env.update(config_obj.container_env)
 

@@ -10,7 +10,13 @@ from pathlib import Path
 from typing import Any
 
 from paude.backends.base import Session, SessionConfig
-from paude.backends.shared import SQUID_BLOCKED_LOG_PATH, decode_path, encode_path
+from paude.backends.shared import (
+    PAUDE_LABEL_AGENT,
+    SQUID_BLOCKED_LOG_PATH,
+    build_agent_env,
+    decode_path,
+    encode_path,
+)
 from paude.constants import (
     CONTAINER_ENTRYPOINT,
     CONTAINER_WORKSPACE,
@@ -213,6 +219,8 @@ class PodmanBackend:
         status = _get_container_status(container)
         status = self._check_proxy_health(name, labels, status)
 
+        agent_name = labels.get(PAUDE_LABEL_AGENT, "claude")
+
         return Session(
             name=name,
             status=status,
@@ -221,6 +229,7 @@ class PodmanBackend:
             backend_type="podman",
             container_id=container.get("Id", ""),
             volume_name=self._volume_name(name),
+            agent=agent_name,
         )
 
     def _has_proxy(self, session_name: str) -> bool:
@@ -275,6 +284,7 @@ class PodmanBackend:
             PAUDE_LABEL_SESSION: session_name,
             PAUDE_LABEL_WORKSPACE: encode_path(config.workspace, url_safe=True),
             PAUDE_LABEL_CREATED: created_at,
+            PAUDE_LABEL_AGENT: config.agent,
         }
         if use_proxy:
             labels[PAUDE_LABEL_DOMAINS] = ",".join(config.allowed_domains or [])
@@ -318,8 +328,12 @@ class PodmanBackend:
         mounts.extend(["-v", f"{volume_name}:/pvc"])
 
         # Prepare environment
+        from paude.agents import get_agent
+
+        agent = get_agent(config.agent)
         env = dict(config.env)
         env["PAUDE_WORKSPACE"] = CONTAINER_WORKSPACE
+        env.update(build_agent_env(agent.config))
 
         # Add proxy environment variables
         if use_proxy:
@@ -331,13 +345,16 @@ class PodmanBackend:
             env["PAUDE_SUPPRESS_PROMPTS"] = "1"
 
         # Add YOLO flag to args if enabled
-        claude_args = list(config.args)
-        if config.yolo:
-            claude_args = ["--dangerously-skip-permissions"] + claude_args
+        agent_args = list(config.args)
+        if config.yolo and agent.config.yolo_flag:
+            agent_args = [agent.config.yolo_flag] + agent_args
 
         # Store args in environment for entrypoint
-        if claude_args:
-            env["PAUDE_CLAUDE_ARGS"] = " ".join(claude_args)
+        if agent_args:
+            env[agent.config.args_env_var] = " ".join(agent_args)
+        # Backward compat: also set PAUDE_CLAUDE_ARGS for existing containers
+        if agent_args and agent.config.name == "claude":
+            env["PAUDE_CLAUDE_ARGS"] = " ".join(agent_args)
 
         # Create GCP ADC secret (if credentials exist)
         secret_spec = self._ensure_gcp_adc_secret()
@@ -378,6 +395,7 @@ class PodmanBackend:
             backend_type="podman",
             container_id=container_name,
             volume_name=volume_name,
+            agent=config.agent,
         )
 
     def start_session_no_attach(self, name: str) -> None:

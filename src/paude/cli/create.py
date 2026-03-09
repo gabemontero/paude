@@ -8,6 +8,7 @@ from typing import Annotated
 
 import typer
 
+from paude.agents import get_agent, list_agents
 from paude.backends import (
     PodmanBackend,
     SessionConfig,
@@ -26,7 +27,7 @@ from paude.cli.helpers import (
     _detect_dev_script_dir,
     _expand_allowed_domains,
     _finalize_session_create,
-    _parse_claude_args,
+    _parse_agent_args,
     _prepare_session_create,
 )
 from paude.config.models import PaudeConfig
@@ -137,6 +138,13 @@ def session_create(
             help="Inactivity minutes before removing credentials (OpenShift).",
         ),
     ] = 60,
+    agent: Annotated[
+        str,
+        typer.Option(
+            "--agent",
+            help="CLI agent to use (e.g., claude).",
+        ),
+    ] = "claude",
     git: Annotated[
         bool,
         typer.Option(
@@ -146,11 +154,18 @@ def session_create(
     ] = False,
 ) -> None:
     """Create a new persistent session (does not start it)."""
+    # Validate agent name
+    try:
+        get_agent(agent)
+    except ValueError:
+        available = ", ".join(list_agents())
+        typer.echo(f"Error: Unknown agent '{agent}'. Available: {available}", err=True)
+        raise typer.Exit(1) from None
     # Handle dry-run mode
     if dry_run:
         from paude.dry_run import show_dry_run
 
-        parsed_args = _parse_claude_args(claude_args)
+        parsed_args = _parse_agent_args(claude_args)
         expanded = _expand_allowed_domains(allowed_domains)
         flags = {
             "yolo": yolo,
@@ -161,6 +176,7 @@ def session_create(
             "openshift_namespace": openshift_namespace,
             "verbose": verbose,
             "claude_args": parsed_args,
+            "agent": agent,
         }
         show_dry_run(flags)
         raise typer.Exit()
@@ -185,6 +201,7 @@ def session_create(
         yolo=yolo,
         claude_args=claude_args,
         config_obj=config,
+        agent_name=agent,
     )
 
     if backend == BackendType.podman:
@@ -200,6 +217,7 @@ def session_create(
             git=git,
             rebuild=rebuild,
             platform=platform,
+            agent_name=agent,
         )
     else:
         _create_openshift_session(
@@ -218,6 +236,7 @@ def session_create(
             openshift_context=openshift_context,
             openshift_namespace=openshift_namespace,
             credential_timeout=credential_timeout,
+            agent_name=agent,
         )
 
 
@@ -234,6 +253,7 @@ def _create_podman_session(
     git: bool,
     rebuild: bool,
     platform: str | None,
+    agent_name: str = "claude",
 ) -> None:
     """Podman-specific session creation logic."""
     from paude.container import ImageManager
@@ -256,7 +276,8 @@ def _create_podman_session(
         raise typer.Exit(1) from None
 
     # Build mounts
-    mounts = build_mounts(home)
+    agent_instance = get_agent(agent_name)
+    mounts = build_mounts(home, agent_instance)
 
     # Ensure proxy image when domain filtering is active
     podman_proxy_image: str | None = None
@@ -279,6 +300,7 @@ def _create_podman_session(
         allowed_domains=expanded_domains,
         yolo=yolo,
         proxy_image=podman_proxy_image,
+        agent=agent_name,
     )
 
     try:
@@ -323,6 +345,7 @@ def _create_openshift_session(
     openshift_context: str | None,
     openshift_namespace: str | None,
     credential_timeout: int,
+    agent_name: str = "claude",
 ) -> None:
     """OpenShift-specific session creation logic."""
     from paude.backends.openshift import _generate_session_name
@@ -381,6 +404,7 @@ def _create_openshift_session(
             storage_class=storage_class,
             proxy_image=proxy_image,
             credential_timeout=credential_timeout,
+            agent=agent_name,
         )
 
         session = os_backend.create_session(session_config)

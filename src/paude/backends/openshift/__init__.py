@@ -22,7 +22,6 @@ Utilities (for testing):
     _generate_session_name: Generate session name from workspace path.
     _encode_path: Base64 encode a path for labels.
     _decode_path: Decode a base64-encoded path.
-    CLAUDE_EXCLUDES: List of patterns to exclude when syncing ~/.claude.
 """
 
 from paude.backends.openshift.backend import OpenShiftBackend
@@ -39,7 +38,6 @@ from paude.backends.openshift.exceptions import (
     SessionNotFoundError,
 )
 from paude.backends.openshift.resources import (
-    CLAUDE_EXCLUDES,
     _generate_session_name,
 )
 from paude.backends.shared import decode_path as _decode_path
@@ -63,5 +61,4 @@ __all__ = [
     "_generate_session_name",
     "_encode_path",
     "_decode_path",
-    "CLAUDE_EXCLUDES",
 ]

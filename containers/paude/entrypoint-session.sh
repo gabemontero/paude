@@ -2,7 +2,19 @@
 set -e
 
 # Entrypoint for persistent sessions (Podman and OpenShift)
-# Handles: HOME setup, credentials from tmpfs, Claude startup
+# Handles: HOME setup, credentials from tmpfs, agent startup
+# All agent-specific behavior is driven by PAUDE_AGENT_* env vars.
+
+# Agent configuration (defaults to Claude Code for backward compatibility)
+AGENT_NAME="${PAUDE_AGENT_NAME:-claude}"
+AGENT_PROCESS="${PAUDE_AGENT_PROCESS:-claude}"
+AGENT_CONFIG_DIR="${PAUDE_AGENT_CONFIG_DIR:-.claude}"
+AGENT_CONFIG_FILE="${PAUDE_AGENT_CONFIG_FILE:-.claude.json}"
+AGENT_INSTALL_SCRIPT="${PAUDE_AGENT_INSTALL_SCRIPT:-curl -fsSL https://claude.ai/install.sh | bash}"
+AGENT_SESSION_NAME="${PAUDE_AGENT_SESSION_NAME:-claude}"
+AGENT_LAUNCH_CMD="${PAUDE_AGENT_LAUNCH_CMD:-claude}"
+# Backward compat: PAUDE_AGENT_ARGS > PAUDE_CLAUDE_ARGS > positional args
+AGENT_ARGS="${PAUDE_AGENT_ARGS:-${PAUDE_CLAUDE_ARGS:-$*}}"
 
 # Ensure HOME is set correctly for OpenShift arbitrary UID
 # OpenShift runs containers with random UIDs that don't exist in /etc/passwd
@@ -71,7 +83,7 @@ wait_for_credentials() {
 }
 
 # Wait for git repository to be pushed (when PAUDE_WAIT_FOR_GIT=1)
-# On OpenShift, git push happens after the pod starts. Claude Code captures
+# On OpenShift, git push happens after the pod starts. The agent captures
 # git metadata at conversation init, so we must wait for .git before launching.
 wait_for_git() {
     if [[ "${PAUDE_WAIT_FOR_GIT:-}" != "1" ]]; then
@@ -96,27 +108,27 @@ setup_credentials() {
         ln -sf "$config_path/gcloud" "$HOME/.config/gcloud"
     fi
 
-    # Copy claude config (need to be writable, so copy instead of symlink)
+    # Copy agent config (need to be writable, so copy instead of symlink)
     if [[ -d "$config_path/claude" ]]; then
-        mkdir -p "$HOME/.claude"
-        chmod g+rwX "$HOME/.claude" 2>/dev/null || true
+        mkdir -p "$HOME/$AGENT_CONFIG_DIR"
+        chmod g+rwX "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
 
         # Copy entire synced directory structure
-        cp -a "$config_path/claude/." "$HOME/.claude/" 2>/dev/null || true
+        cp -a "$config_path/claude/." "$HOME/$AGENT_CONFIG_DIR/" 2>/dev/null || true
 
-        # Handle claude.json specially - goes to ~/.claude.json
-        if [[ -f "$HOME/.claude/claude.json" ]]; then
-            mv "$HOME/.claude/claude.json" "$HOME/.claude.json" 2>/dev/null || true
-            chmod g+rw "$HOME/.claude.json" 2>/dev/null || true
+        # Handle config file specially - goes to ~/.<config_file>
+        if [[ -n "$AGENT_CONFIG_FILE" ]] && [[ -f "$HOME/$AGENT_CONFIG_DIR/claude.json" ]]; then
+            mv "$HOME/$AGENT_CONFIG_DIR/claude.json" "$HOME/$AGENT_CONFIG_FILE" 2>/dev/null || true
+            chmod g+rw "$HOME/$AGENT_CONFIG_FILE" 2>/dev/null || true
         fi
 
-        # Ensure plugins directory is writable (Claude may update metadata)
-        if [[ -d "$HOME/.claude/plugins" ]]; then
-            chmod -R g+rwX "$HOME/.claude/plugins" 2>/dev/null || true
+        # Ensure plugins directory is writable (agent may update metadata)
+        if [[ -d "$HOME/$AGENT_CONFIG_DIR/plugins" ]]; then
+            chmod -R g+rwX "$HOME/$AGENT_CONFIG_DIR/plugins" 2>/dev/null || true
         fi
 
         # g+rwX sets read/write and execute on directories (X = execute only if dir)
-        chmod -R g+rwX "$HOME/.claude" 2>/dev/null || true
+        chmod -R g+rwX "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
     fi
 
     # Set up gitconfig via symlink
@@ -148,38 +160,38 @@ if [[ -d /credentials ]] && [[ "${PAUDE_CREDENTIAL_WATCHDOG:-1}" == "1" ]]; then
     fi
 fi
 
-# Install Claude Code if not already installed
-# This allows the base image to work without Claude Code pre-installed
-# Claude Code gets installed to the PVC so it persists across restarts
-install_claude_code() {
-    local claude_bin="/pvc/.local/bin/claude"
+# Install agent if not already installed
+# This allows the base image to work without the agent pre-installed
+# The agent gets installed to the PVC so it persists across restarts
+install_agent() {
+    local agent_bin="/pvc/.local/bin/$AGENT_PROCESS"
 
-    # Check if claude is already installed and executable
-    if [[ -x "$claude_bin" ]]; then
+    # Check if agent is already installed and executable
+    if [[ -x "$agent_bin" ]]; then
         return 0
     fi
 
     # Also check if it's in the home directory (from image build)
-    if [[ -x "$HOME/.local/bin/claude" ]]; then
+    if [[ -x "$HOME/.local/bin/$AGENT_PROCESS" ]]; then
         return 0
     fi
 
-    echo "Installing Claude Code to PVC..." >&2
+    echo "Installing $AGENT_NAME to PVC..." >&2
 
     # Set up installation directory in PVC for persistence
     mkdir -p /pvc/.local/bin
     export CLAUDE_INSTALL_DIR=/pvc/.local
 
-    # Install Claude Code using the official installer
-    if curl -fsSL https://claude.ai/install.sh | bash 2>&1; then
-        echo "Claude Code installed successfully." >&2
+    # Install using the agent's install script
+    if eval "$AGENT_INSTALL_SCRIPT" 2>&1; then
+        echo "$AGENT_NAME installed successfully." >&2
     else
-        echo "Warning: Failed to install Claude Code. You may need to install it manually." >&2
+        echo "Warning: Failed to install $AGENT_NAME. You may need to install it manually." >&2
         return 1
     fi
 }
 
-# Add PVC local bin to PATH (for Claude Code and other tools installed to PVC)
+# Add PVC local bin to PATH (for agent and other tools installed to PVC)
 # Also keep home .local/bin for tools installed during image build
 export PATH="/pvc/.local/bin:$HOME/.local/bin:$PATH"
 
@@ -196,66 +208,76 @@ if [[ -n "${GH_TOKEN:-}" ]] && [[ -z "${GH_CONFIG_DIR:-}" ]]; then
     mkdir -p "$GH_CONFIG_DIR" 2>/dev/null || true
 fi
 
-# Install Claude Code if needed (skip if PAUDE_SKIP_CLAUDE_INSTALL is set, useful for CI)
-if [[ -z "${PAUDE_SKIP_CLAUDE_INSTALL:-}" ]]; then
-    install_claude_code
+# Install agent if needed (skip if PAUDE_SKIP_AGENT_INSTALL or legacy PAUDE_SKIP_CLAUDE_INSTALL is set)
+if [[ -z "${PAUDE_SKIP_AGENT_INSTALL:-}" ]] && [[ -z "${PAUDE_SKIP_CLAUDE_INSTALL:-}" ]]; then
+    install_agent
 fi
 
 # Legacy: Copy seed files if provided via Secret mount (Podman backend fallback)
 if [[ -d /tmp/claude.seed ]] && [[ ! -d /credentials ]]; then
-    mkdir -p "$HOME/.claude"
-    chmod g+rwX "$HOME/.claude" 2>/dev/null || true
+    mkdir -p "$HOME/$AGENT_CONFIG_DIR"
+    chmod g+rwX "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
 
     # Copy entire seed directory structure (includes commands/, plugins/, etc.)
-    cp -a /tmp/claude.seed/. "$HOME/.claude/" 2>/dev/null || true
+    cp -a /tmp/claude.seed/. "$HOME/$AGENT_CONFIG_DIR/" 2>/dev/null || true
 
-    # Handle claude.json specially - goes to ~/.claude.json
-    if [[ -f "$HOME/.claude/claude.json" ]]; then
-        mv "$HOME/.claude/claude.json" "$HOME/.claude.json" 2>/dev/null || true
-        chmod g+rw "$HOME/.claude.json" 2>/dev/null || true
+    # Handle config file specially - goes to ~/.<config_file>
+    if [[ -n "$AGENT_CONFIG_FILE" ]] && [[ -f "$HOME/$AGENT_CONFIG_DIR/claude.json" ]]; then
+        mv "$HOME/$AGENT_CONFIG_DIR/claude.json" "$HOME/$AGENT_CONFIG_FILE" 2>/dev/null || true
+        chmod g+rw "$HOME/$AGENT_CONFIG_FILE" 2>/dev/null || true
     fi
 
-    # Ensure plugins directory is writable (Claude may update metadata)
-    if [[ -d "$HOME/.claude/plugins" ]]; then
-        chmod -R g+rwX "$HOME/.claude/plugins" 2>/dev/null || true
+    # Ensure plugins directory is writable (agent may update metadata)
+    if [[ -d "$HOME/$AGENT_CONFIG_DIR/plugins" ]]; then
+        chmod -R g+rwX "$HOME/$AGENT_CONFIG_DIR/plugins" 2>/dev/null || true
     fi
 
-    chmod -R g+rwX "$HOME/.claude" 2>/dev/null || true
+    chmod -R g+rwX "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
 fi
 
-# Also check for separate claude.json.seed mount (Podman backend)
+# Also check for separate config file seed mount (Podman backend)
 if [[ -f /tmp/claude.json.seed ]] || [[ -L /tmp/claude.json.seed ]]; then
-    cp -L /tmp/claude.json.seed "$HOME/.claude.json" 2>/dev/null || true
-    chmod g+rw "$HOME/.claude.json" 2>/dev/null || true
+    if [[ -n "$AGENT_CONFIG_FILE" ]]; then
+        cp -L /tmp/claude.json.seed "$HOME/$AGENT_CONFIG_FILE" 2>/dev/null || true
+        chmod g+rw "$HOME/$AGENT_CONFIG_FILE" 2>/dev/null || true
+    fi
 fi
 
-# Suppress Claude Code interactive prompts in sandboxed containers
+# Suppress interactive prompts in sandboxed containers
+# If a generated sandbox config script exists, source it; otherwise use built-in logic
 apply_sandbox_config() {
     if [[ "${PAUDE_SUPPRESS_PROMPTS:-}" != "1" ]]; then
         return 0
     fi
 
-    local workspace="${PAUDE_WORKSPACE:-/workspace}"
-    local claude_json="$HOME/.claude.json"
-    local settings_json="$HOME/.claude/settings.json"
+    # Check for agent-generated sandbox config script
+    if [[ -f /tmp/agent-sandbox-config.sh ]]; then
+        source /tmp/agent-sandbox-config.sh
+        return 0
+    fi
 
-    # Suppress trust prompt and onboarding by patching ~/.claude.json
-    if [[ -f "$claude_json" ]]; then
+    # Fallback: built-in Claude Code sandbox config
+    local workspace="${PAUDE_WORKSPACE:-/workspace}"
+    local config_file="$HOME/$AGENT_CONFIG_FILE"
+    local settings_json="$HOME/$AGENT_CONFIG_DIR/settings.json"
+
+    # Suppress trust prompt and onboarding
+    if [[ -f "$config_file" ]]; then
         jq --arg ws "$workspace" '. * {
             hasCompletedOnboarding: true,
             projects: {($ws): {hasTrustDialogAccepted: true}}
-        }' "$claude_json" > "${claude_json}.tmp" \
-            && mv "${claude_json}.tmp" "$claude_json"
+        }' "$config_file" > "${config_file}.tmp" \
+            && mv "${config_file}.tmp" "$config_file"
     else
         jq -n --arg ws "$workspace" '{
             hasCompletedOnboarding: true,
             projects: {($ws): {hasTrustDialogAccepted: true}}
-        }' > "$claude_json"
+        }' > "$config_file"
     fi
 
-    # Suppress bypass permissions warning when --dangerously-skip-permissions is in args
-    if [[ "${PAUDE_CLAUDE_ARGS:-}" == *"--dangerously-skip-permissions"* ]]; then
-        mkdir -p "$HOME/.claude" 2>/dev/null || true
+    # Suppress bypass permissions warning when yolo flag is in args
+    if [[ "${AGENT_ARGS:-}" == *"--dangerously-skip-permissions"* ]]; then
+        mkdir -p "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
         local skip_patch='{"skipDangerousModePermissionPrompt": true}'
         if [[ -f "$settings_json" ]]; then
             jq --argjson patch "$skip_patch" '. * $patch' "$settings_json" > "${settings_json}.tmp" \
@@ -276,15 +298,12 @@ WORKSPACE="${PAUDE_WORKSPACE:-/workspace}"
 mkdir -p "$WORKSPACE" 2>/dev/null || true
 chmod g+rwX "$WORKSPACE" 2>/dev/null || true
 
-# Fix workspace .claude directory if it exists (synced from host)
-if [[ -d "$WORKSPACE/.claude" ]]; then
-    chmod -R g+rwX "$WORKSPACE/.claude" 2>/dev/null || true
+# Fix workspace config directory if it exists (synced from host)
+if [[ -d "$WORKSPACE/$AGENT_CONFIG_DIR" ]]; then
+    chmod -R g+rwX "$WORKSPACE/$AGENT_CONFIG_DIR" 2>/dev/null || true
 fi
 
-# Get claude args from environment or command line
-CLAUDE_ARGS="${PAUDE_CLAUDE_ARGS:-$*}"
-
-SESSION_NAME="claude"
+SESSION_NAME="$AGENT_SESSION_NAME"
 
 # Set up terminal environment for tmux
 export TERM="${TERM:-xterm-256color}"
@@ -300,13 +319,13 @@ export SHELL=/bin/bash
 cd "$WORKSPACE" 2>/dev/null || true
 
 if tmux -u has-session -t "$SESSION_NAME" 2>/dev/null; then
-    echo "Attaching to existing Claude session..."
+    echo "Attaching to existing $AGENT_NAME session..."
     exec tmux -u attach -t "$SESSION_NAME"
 else
-    echo "Starting new Claude session..."
+    echo "Starting new $AGENT_NAME session..."
     tmux -u new-session -s "$SESSION_NAME" -d "bash -l"
     tmux send-keys -t "$SESSION_NAME" "export HOME=$HOME PATH=$HOME/.local/bin:\$PATH" Enter
     tmux send-keys -t "$SESSION_NAME" "cd $WORKSPACE" Enter
-    tmux send-keys -t "$SESSION_NAME" "claude $CLAUDE_ARGS" Enter
+    tmux send-keys -t "$SESSION_NAME" "$AGENT_LAUNCH_CMD $AGENT_ARGS" Enter
     exec tmux -u attach -t "$SESSION_NAME"
 fi
