@@ -11,7 +11,7 @@ from pathlib import Path
 import typer
 
 from paude.backends.base import Backend, Session
-from paude.constants import CONTAINER_HOME
+from paude.constants import BASE_REF_NAME, CONTAINER_HOME, CONTAINER_WORKSPACE
 
 _PROTECTED_BRANCH_PATTERNS = frozenset(
     {
@@ -349,13 +349,15 @@ def reset_session(
 
     typer.echo(f"Resetting workspace to '{branch}'...", err=True)
     quoted_branch = shlex.quote(branch)
+    ws = CONTAINER_WORKSPACE
     reset_cmd = (
-        f"git -C /pvc/workspace fetch origin 2>/dev/null; "
-        f"git -C /pvc/workspace checkout {quoted_branch} 2>/dev/null; "
-        f"git -C /pvc/workspace reset --hard origin/{quoted_branch} "
+        f"git -C {ws} fetch origin 2>/dev/null; "
+        f"git -C {ws} checkout {quoted_branch} 2>/dev/null; "
+        f"git -C {ws} reset --hard origin/{quoted_branch} "
         f"2>/dev/null || "
-        f"git -C /pvc/workspace reset --hard HEAD; "
-        f"git -C /pvc/workspace clean -fdx"
+        f"git -C {ws} reset --hard HEAD; "
+        f"git -C {ws} clean -fdx && "
+        f"git -C {ws} update-ref {BASE_REF_NAME} HEAD"
     )
     rc, _stdout, stderr = backend.exec_in_session(session_name, reset_cmd)
     if rc != 0:

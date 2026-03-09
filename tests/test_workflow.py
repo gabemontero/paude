@@ -453,7 +453,7 @@ class TestResetSession:
 
         reset_session("test", force=True)
 
-        # Should exec reset cmd and clear/cleanup cmd
+        # Should exec reset cmd (includes base ref update) and clear/cleanup cmd
         assert mock_backend.exec_in_session.call_count == 2
 
     @patch("paude.cli.find_session_backend")
@@ -476,7 +476,7 @@ class TestResetSession:
 
         reset_session("test", force=True, keep_conversation=True)
 
-        # Only reset cmd, no clear cmd or /clear
+        # Only reset cmd (includes base ref update), no clear cmd or /clear
         assert mock_backend.exec_in_session.call_count == 1
 
     @patch("paude.cli.find_session_backend")
@@ -532,7 +532,7 @@ class TestResetSession:
         # then the reset exec calls
         mock_backend.exec_in_session.side_effect = [
             (0, "", ""),  # git fetch && git merge-base --is-ancestor (merged)
-            (0, "", ""),  # git reset --hard
+            (0, "", ""),  # git reset --hard + update-ref
             (0, "", ""),  # clear conversation + /clear
         ]
 

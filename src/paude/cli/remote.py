@@ -182,6 +182,8 @@ def _setup_git_after_create(
         git_push_tags_to_remote,
         git_push_to_remote,
         is_git_repository,
+        set_base_ref_in_container_openshift,
+        set_base_ref_in_container_podman,
         set_origin_in_container_openshift,
         set_origin_in_container_podman,
         setup_precommit_in_container_openshift,
@@ -215,18 +217,22 @@ def _setup_git_after_create(
         typer.echo("Warning: Failed to push branch.", err=True)
         return False
 
+    # Step 2b: Set base ref (marks initial push point for accurate commit counts)
+    if backend_type == "podman":
+        container_name = f"paude-{session_name}"
+        set_base_ref_in_container_podman(container_name)
+    else:
+        pod_name = f"paude-{session_name}-0"
+        namespace = openshift_namespace or "default"
+        set_base_ref_in_container_openshift(
+            pod_name, namespace, context=openshift_context
+        )
+
     # Step 3: Push tags
     typer.echo("Pushing tags...")
     if not git_push_tags_to_remote(remote_name):
         typer.echo("Warning: Failed to push tags.", err=True)
         # Non-fatal, continue
-
-    # Pre-compute container identifiers for Steps 4-6
-    if backend_type == "podman":
-        container_name = f"paude-{session_name}"
-    else:
-        pod_name = f"paude-{session_name}-0"
-        namespace = openshift_namespace or "default"
 
     # Step 4: Set origin in container if local origin exists
     origin_url = get_local_origin_url()
@@ -308,6 +314,8 @@ def _remote_add(
         is_container_running_podman,
         is_ext_protocol_allowed,
         is_pod_running_openshift,
+        set_base_ref_in_container_openshift,
+        set_base_ref_in_container_podman,
     )
 
     # Check if ext protocol is enabled (required for ext:: remotes)
@@ -423,6 +431,13 @@ def _remote_add(
             if not git_push_to_remote(remote_name, branch):
                 typer.echo("Push failed.", err=True)
                 raise typer.Exit(1)
+            # Set base ref to mark initial push point
+            if session.backend_type == "openshift":
+                set_base_ref_in_container_openshift(
+                    pod_name, namespace, context=openshift_context
+                )
+            else:
+                set_base_ref_in_container_podman(container_name)
             typer.echo("Push complete.")
         else:
             typer.echo("")

@@ -464,8 +464,10 @@ class TestRemoteCommand:
     @patch("paude.git_remote.git_remote_add")
     @patch("paude.git_remote.get_current_branch")
     @patch("paude.git_remote.git_push_to_remote")
+    @patch("paude.git_remote.set_base_ref_in_container_podman")
     def test_remote_add_with_push_flag(
         self,
+        mock_set_base_ref,
         mock_push,
         mock_branch,
         mock_add,
@@ -483,6 +485,7 @@ class TestRemoteCommand:
         mock_add.return_value = True
         mock_branch.return_value = "main"
         mock_push.return_value = True
+        mock_set_base_ref.return_value = True
 
         # Create a mock session
         mock_session = MagicMock()

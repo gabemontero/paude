@@ -11,7 +11,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from paude.constants import CONTAINER_HOME, CONTAINER_WORKSPACE
+from paude.constants import BASE_REF_NAME, CONTAINER_HOME, CONTAINER_WORKSPACE
 
 
 def build_openshift_remote_url(
@@ -444,6 +444,27 @@ def fetch_tags_in_container_openshift(
     """Fetch tags from origin in an OpenShift pod's workspace."""
     exec_cmd = _build_openshift_exec_cmd(pod_name, namespace, context, _FETCH_TAGS_CMD)
     return _exec_in_container(exec_cmd)
+
+
+_SET_BASE_REF_CMD = f"git -C {CONTAINER_WORKSPACE} update-ref {BASE_REF_NAME} HEAD"
+
+
+def set_base_ref_in_container_podman(container_name: str) -> bool:
+    """Set refs/paude/base to HEAD in a Podman container's workspace."""
+    exec_cmd = _build_podman_exec_cmd(container_name, _SET_BASE_REF_CMD)
+    return _exec_in_container(exec_cmd, error_msg="Failed to set base ref")
+
+
+def set_base_ref_in_container_openshift(
+    pod_name: str,
+    namespace: str,
+    context: str | None = None,
+) -> bool:
+    """Set refs/paude/base to HEAD in an OpenShift pod's workspace."""
+    exec_cmd = _build_openshift_exec_cmd(
+        pod_name, namespace, context, _SET_BASE_REF_CMD
+    )
+    return _exec_in_container(exec_cmd, error_msg="Failed to set base ref")
 
 
 def setup_precommit_in_container_podman(container_name: str) -> bool:

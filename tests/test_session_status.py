@@ -229,6 +229,18 @@ class TestFormatWorkSummary:
         assert "editing" not in result
 
 
+class TestCombinedQueryCmd:
+    """Tests for _COMBINED_QUERY_CMD."""
+
+    def test_uses_base_ref_with_fallback(self) -> None:
+        from paude.constants import BASE_REF_NAME
+        from paude.session_status import _COMBINED_QUERY_CMD
+
+        assert BASE_REF_NAME in _COMBINED_QUERY_CMD
+        assert "origin/main" in _COMBINED_QUERY_CMD
+        assert "$BASE_REF..HEAD" in _COMBINED_QUERY_CMD
+
+
 class TestGetSessionEnrichment:
     """Tests for get_session_enrichment."""
 

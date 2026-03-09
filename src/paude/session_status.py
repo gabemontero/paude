@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass, field
 
 from paude.backends.base import Backend
-from paude.constants import CONTAINER_WORKSPACE
+from paude.constants import BASE_REF_NAME, CONTAINER_WORKSPACE
 
 
 @dataclass
@@ -30,12 +30,12 @@ _COMBINED_QUERY_CMD = (
     "tmux list-windows -t claude"
     " -F '#{window_activity}' 2>/dev/null; true"
     f" && cd {CONTAINER_WORKSPACE}"
-    ' && echo "BRANCH:$(git rev-parse --abbrev-ref HEAD'
-    ' 2>/dev/null)"'
-    ' && echo "AHEAD:$(git rev-list --count'
-    ' origin/main..HEAD 2>/dev/null)"'
+    f" && BASE_REF=$(git rev-parse --verify {BASE_REF_NAME} 2>/dev/null"
+    f" && echo {BASE_REF_NAME} || echo origin/main)"
+    ' && echo "BRANCH:$(git rev-parse --abbrev-ref HEAD 2>/dev/null)"'
+    ' && echo "AHEAD:$(git rev-list --count $BASE_REF..HEAD 2>/dev/null)"'
     ' && echo "SUBJECT:$(git log --oneline -1'
-    ' --format=%s origin/main..HEAD 2>/dev/null)"'
+    ' --format=%s $BASE_REF..HEAD 2>/dev/null)"'
     ' && echo "CHANGED:$(git diff --name-only HEAD 2>/dev/null'
     " | head -5 | sed 's|.*/||' | paste -sd,)\""
 )

@@ -511,6 +511,87 @@ class TestIsPodRunningOpenshift:
         assert "my-ctx" in call_args
 
 
+class TestSetBaseRefInContainerPodman:
+    """Tests for set_base_ref_in_container_podman."""
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_returns_true_on_success(self, mock_run) -> None:
+        """Return True when setting base ref succeeds."""
+        from paude.git_remote import set_base_ref_in_container_podman
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        result = set_base_ref_in_container_podman("paude-test")
+
+        assert result is True
+        call_args = mock_run.call_args[0][0]
+        assert call_args[0:2] == ["podman", "exec"]
+        assert "paude-test" in call_args
+        bash_cmd_idx = call_args.index("-c") + 1
+        assert "update-ref refs/paude/base HEAD" in call_args[bash_cmd_idx]
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_returns_false_on_failure(self, mock_run) -> None:
+        """Return False when setting base ref fails."""
+        from paude.git_remote import set_base_ref_in_container_podman
+
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "exec error"
+
+        result = set_base_ref_in_container_podman("paude-test")
+
+        assert result is False
+
+
+class TestSetBaseRefInContainerOpenshift:
+    """Tests for set_base_ref_in_container_openshift."""
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_returns_true_on_success(self, mock_run) -> None:
+        """Return True when setting base ref succeeds."""
+        from paude.git_remote import set_base_ref_in_container_openshift
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        result = set_base_ref_in_container_openshift("pod-0", "namespace")
+
+        assert result is True
+        call_args = mock_run.call_args[0][0]
+        assert "oc" in call_args
+        assert "pod-0" in call_args
+        bash_cmd_idx = call_args.index("-c") + 1
+        assert "update-ref refs/paude/base HEAD" in call_args[bash_cmd_idx]
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_with_context(self, mock_run) -> None:
+        """Include context when specified."""
+        from paude.git_remote import set_base_ref_in_container_openshift
+
+        mock_run.return_value.returncode = 0
+        mock_run.return_value.stderr = ""
+
+        result = set_base_ref_in_container_openshift("pod-0", "ns", context="my-ctx")
+
+        assert result is True
+        call_args = mock_run.call_args[0][0]
+        assert "--context" in call_args
+        assert "my-ctx" in call_args
+
+    @patch("paude.git_remote.subprocess.run")
+    def test_returns_false_on_failure(self, mock_run) -> None:
+        """Return False when setting base ref fails."""
+        from paude.git_remote import set_base_ref_in_container_openshift
+
+        mock_run.return_value.returncode = 1
+        mock_run.return_value.stderr = "exec error"
+
+        result = set_base_ref_in_container_openshift("pod-0", "namespace")
+
+        assert result is False
+
+
 class TestGitPushToRemote:
     """Tests for git_push_to_remote."""
 
