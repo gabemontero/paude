@@ -278,7 +278,8 @@ class TestStatusSessions:
         assert "Active" in captured.out
         assert "myproject" in captured.out
         assert "SUMMARY" in captured.out
-        assert "feat-auth: Add OAuth (+2)" in captured.out
+        assert "feat-auth Add OAuth (+2)" in captured.out
+        assert "STATUS" not in captured.out
 
     @patch("paude.session_discovery.collect_all_sessions")
     def test_no_sessions(
@@ -295,7 +296,7 @@ class TestStatusSessions:
 
     @patch("paude.session_status.get_session_enrichment")
     @patch("paude.session_discovery.collect_all_sessions")
-    def test_stopped_session_shows_stopped(
+    def test_stopped_sessions_excluded(
         self,
         mock_collect: MagicMock,
         mock_enrichment: MagicMock,
@@ -315,8 +316,8 @@ class TestStatusSessions:
         status_sessions()
 
         captured = capsys.readouterr()
-        assert "Stopped" in captured.out
-        # Enrichment should not be queried for stopped sessions
+        assert "No running sessions" in captured.out
+        assert "stopped-session" not in captured.out
         mock_enrichment.assert_not_called()
 
     @patch("paude.session_status.get_session_enrichment")

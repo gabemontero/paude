@@ -273,15 +273,19 @@ def status_sessions(
         typer.echo("No sessions found.")
         return
 
+    running = [(s, b) for s, b in all_sessions if s.status == "running"]
+    if not running:
+        typer.echo("No running sessions.")
+        return
+
     rows: list[tuple[Session, str, SessionActivity | None, WorkSummary | None]] = []
-    for session, backend in all_sessions:
+    for session, backend in running:
         activity: SessionActivity | None = None
         summary: WorkSummary | None = None
-        if session.status == "running":
-            try:
-                activity, summary = get_session_enrichment(backend, session.name)
-            except Exception:  # noqa: S110
-                pass
+        try:
+            activity, summary = get_session_enrichment(backend, session.name)
+        except Exception:  # noqa: S110
+            pass
         rows.append((session, session.backend_type, activity, summary))
 
     def _sort_key(
@@ -298,26 +302,20 @@ def status_sessions(
 
     cols = (
         f"{'SESSION':<20} {'PROJECT':<15} {'BACKEND':<10} "
-        f"{'STATUS':<10} {'ACTIVITY':<10} {'STATE':<10} {'SUMMARY'}"
+        f"{'ACTIVITY':<10} {'STATE':<10} {'SUMMARY'}"
     )
     typer.echo(cols)
     typer.echo("-" * len(cols))
 
     for session, backend_type, activity, summary in rows:
         project = session.workspace.name if session.workspace else ""
-        status = session.status
         act_str = activity.last_activity if activity else ""
-        if activity:
-            state_str = activity.state
-        elif status == "stopped":
-            state_str = "Stopped"
-        else:
-            state_str = ""
-        summary_str = format_work_summary(summary)
+        state_str = activity.state if activity else ""
+        summary_str = format_work_summary(summary, max_width=50)
 
         typer.echo(
             f"{session.name:<20} {project:<15} {backend_type:<10} "
-            f"{status:<10} {act_str:<10} {state_str:<10} {summary_str}"
+            f"{act_str:<10} {state_str:<10} {summary_str}"
         )
 
 

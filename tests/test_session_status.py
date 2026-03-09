@@ -144,15 +144,23 @@ class TestFormatWorkSummary:
         )
         assert format_work_summary(summary) == "Fix login bug (+3)"
 
+    def test_main_with_commits_no_subject(self) -> None:
+        summary = WorkSummary(branch="main", commits_ahead=3, latest_subject="")
+        assert format_work_summary(summary) == "(+3)"
+
     def test_feature_branch_with_commits(self) -> None:
         summary = WorkSummary(
             branch="feat-auth", commits_ahead=2, latest_subject="Add OAuth"
         )
-        assert format_work_summary(summary) == "feat-auth: Add OAuth (+2)"
+        assert format_work_summary(summary) == "feat-auth Add OAuth (+2)"
 
     def test_feature_branch_no_commits(self) -> None:
         summary = WorkSummary(branch="feat-auth", commits_ahead=0, latest_subject="")
         assert format_work_summary(summary) == "feat-auth"
+
+    def test_feature_branch_commits_no_subject(self) -> None:
+        summary = WorkSummary(branch="feat-auth", commits_ahead=5, latest_subject="")
+        assert format_work_summary(summary) == "feat-auth (+5)"
 
     def test_main_clean(self) -> None:
         summary = WorkSummary(branch="main", commits_ahead=0, latest_subject="")

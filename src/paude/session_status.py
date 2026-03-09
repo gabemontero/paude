@@ -102,16 +102,18 @@ def format_work_summary(summary: WorkSummary | None, max_width: int = 40) -> str
 
     is_default = summary.branch in ("main", "master")
 
-    if summary.commits_ahead > 0 and summary.latest_subject:
-        suffix = f" (+{summary.commits_ahead})"
-        if is_default:
-            text = f"{summary.latest_subject}{suffix}"
-        else:
-            text = f"{summary.branch}: {summary.latest_subject}{suffix}"
-    elif not is_default:
-        text = summary.branch
-    else:
+    parts: list[str] = []
+    if not is_default:
+        parts.append(summary.branch)
+    if summary.latest_subject:
+        parts.append(summary.latest_subject)
+    if summary.commits_ahead > 0:
+        parts.append(f"(+{summary.commits_ahead})")
+
+    if not parts:
         return ""
+
+    text = " ".join(parts)
 
     if len(text) > max_width:
         text = text[: max_width - 3] + "..."
