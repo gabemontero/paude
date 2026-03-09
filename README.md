@@ -596,9 +596,6 @@ These properties are ignored for security reasons:
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development setup, testing, and release instructions.
-
-**Status**: See the [roadmap](docs/ROADMAP.md) for current status and planned features.
-
 ## License
 
 MIT
