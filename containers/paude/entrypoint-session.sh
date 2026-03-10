@@ -333,7 +333,10 @@ fi
 SESSION_NAME="$AGENT_SESSION_NAME"
 
 # Set up terminal environment for tmux
-export TERM="${TERM:-xterm-256color}"
+# Force xterm-256color so the container's tmux knows the outer terminal supports
+# 256 colors. The inherited TERM (often "screen" from a host tmux) understates
+# the actual capabilities of the terminal chain.
+export TERM=xterm-256color
 
 # Set UTF-8 locale for proper character rendering
 export LANG="${LANG:-C.UTF-8}"

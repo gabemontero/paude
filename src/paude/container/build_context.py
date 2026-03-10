@@ -60,6 +60,11 @@ def copy_entrypoints(entrypoint: Path, dest_dir: Path) -> None:
         entrypoint_session_dest.write_text(content, newline="\n")
         entrypoint_session_dest.chmod(0o755)
 
+    tmux_conf = entrypoint.parent / "tmux.conf"
+    if tmux_conf.exists():
+        content = tmux_conf.read_text().replace("\r\n", "\n")
+        (dest_dir / "tmux.conf").write_text(content, newline="\n")
+
 
 def inject_features(dockerfile_content: str, features: list[FeatureSpec] | None) -> str:
     """Inject devcontainer features block into Dockerfile content."""
