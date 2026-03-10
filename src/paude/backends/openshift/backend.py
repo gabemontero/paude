@@ -9,7 +9,10 @@ import sys
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from paude.agents.base import Agent
 
 from paude.backends.base import Session, SessionConfig
 from paude.backends.openshift.build import BuildOrchestrator
@@ -181,10 +184,16 @@ class OpenShiftBackend:
         script_dir: Path | None = None,
         force_rebuild: bool = False,
         session_name: str | None = None,
+        agent: Agent | None = None,
     ) -> str:
         """Ensure image via build (delegates to BuildOrchestrator)."""
         return self._builder.ensure_image_via_build(
-            config, workspace, script_dir, force_rebuild, session_name
+            config,
+            workspace,
+            script_dir,
+            force_rebuild,
+            session_name,
+            agent=agent,
         )
 
     def ensure_proxy_image_via_build(

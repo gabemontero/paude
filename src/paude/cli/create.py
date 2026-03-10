@@ -377,6 +377,7 @@ def _create_openshift_session(
             script_dir=os_script_dir,
             force_rebuild=rebuild,
             session_name=session_name,
+            agent=get_agent(agent_name),
         )
 
         # Build proxy image when needed (PAUDE_DEV=1 and proxy is used)
