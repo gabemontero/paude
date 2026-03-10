@@ -448,11 +448,12 @@ class TestRemoteCommand:
         [
             pytest.param("add", id="add"),
             pytest.param("remove", id="remove"),
+            pytest.param("cleanup", id="cleanup"),
         ],
     )
     @patch("paude.git_remote.is_git_repository")
     def test_remote_action_requires_git_repo(self, mock_is_git, action):
-        """remote add/remove fails if not in git repository."""
+        """remote add/remove/cleanup fails if not in git repository."""
         mock_is_git.return_value = False
 
         result = runner.invoke(app, ["remote", action, "my-session"])
@@ -493,7 +494,7 @@ class TestRemoteCommand:
         # Error goes to stderr, which typer may redirect to stdout
         output = result.stdout + (result.stderr or "")
         assert "Unknown action: invalid" in output
-        assert "Valid actions: add, list, remove" in output
+        assert "Valid actions: add, list, remove, cleanup" in output
 
     @patch("paude.cli.remote.find_session_backend")
     @patch("paude.git_remote.is_git_repository")
@@ -1227,6 +1228,7 @@ class TestDeleteGitRemoteCleanup:
     ):
         """Delete calls git remote cleanup after successful session deletion."""
         mock_podman = MagicMock()
+        mock_podman.get_session.return_value = MagicMock(workspace=Path("/some/project"))
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1235,7 +1237,7 @@ class TestDeleteGitRemoteCleanup:
 
         assert result.exit_code == 0
         assert "Session 'my-session' deleted." in result.output
-        mock_cleanup.assert_called_once_with("my-session")
+        mock_cleanup.assert_called_once_with("my-session", Path("/some/project"))
 
     @patch("paude.cli.remote.subprocess.run")
     @patch("paude.git_remote.is_git_repository")
@@ -1249,6 +1251,7 @@ class TestDeleteGitRemoteCleanup:
         """Delete works when not in a git repository."""
         mock_is_git.return_value = False
         mock_podman = MagicMock()
+        mock_podman.get_session.return_value = None
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1277,6 +1280,7 @@ class TestDeleteGitRemoteCleanup:
             returncode=1, stderr="error: No such remote: 'paude-my-session'"
         )
         mock_podman = MagicMock()
+        mock_podman.get_session.return_value = None
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1288,11 +1292,12 @@ class TestDeleteGitRemoteCleanup:
         # Should not print anything about git remote since it didn't exist
         assert "Removed git remote" not in result.output
         assert "Warning" not in result.output
-        # Verify correct command was called
+        # Verify correct command was called (cwd=None since workspace is None)
         mock_run.assert_called_once_with(
             ["git", "remote", "remove", "paude-my-session"],
             capture_output=True,
             text=True,
+            cwd=None,
         )
 
     @patch("paude.cli.remote.subprocess.run")
@@ -1308,6 +1313,7 @@ class TestDeleteGitRemoteCleanup:
         mock_is_git.return_value = True
         mock_run.return_value = MagicMock(returncode=0, stderr="")
         mock_podman = MagicMock()
+        mock_podman.get_session.return_value = None
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1333,6 +1339,7 @@ class TestDeleteGitRemoteCleanup:
             returncode=1, stderr="fatal: some other error"
         )
         mock_podman = MagicMock()
+        mock_podman.get_session.return_value = None
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1356,6 +1363,7 @@ class TestDeleteGitRemoteCleanup:
         """Git remote cleanup is NOT called when session deletion fails."""
         mock_podman = MagicMock()
         mock_podman.delete_session.side_effect = Exception("Deletion failed")
+        mock_podman.get_session.return_value = MagicMock(workspace=Path("/some/project"))
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1375,12 +1383,15 @@ class TestDeleteGitRemoteCleanup:
     ):
         """Delete cleans up git remote when backend is auto-detected."""
         mock_backend = MagicMock()
+        mock_backend.get_session.return_value = MagicMock(
+            workspace=Path("/some/project")
+        )
         mock_find_backend.return_value = ("podman", mock_backend)
 
         result = runner.invoke(app, ["delete", "auto-session", "--confirm"])
 
         assert result.exit_code == 0
-        mock_cleanup.assert_called_once_with("auto-session")
+        mock_cleanup.assert_called_once_with("auto-session", Path("/some/project"))
 
     @patch("paude.cli.remote._cleanup_session_git_remote")
     @patch("paude.cli.helpers.OpenShiftBackend")
@@ -1393,6 +1404,9 @@ class TestDeleteGitRemoteCleanup:
     ):
         """Delete cleans up git remote when using OpenShift backend."""
         mock_os_backend = MagicMock()
+        mock_os_backend.get_session.return_value = MagicMock(
+            workspace=Path("/some/project")
+        )
         mock_os_backend_class.return_value = mock_os_backend
 
         result = runner.invoke(
@@ -1401,7 +1415,184 @@ class TestDeleteGitRemoteCleanup:
 
         assert result.exit_code == 0
         assert "Session 'os-session' deleted." in result.output
-        mock_cleanup.assert_called_once_with("os-session")
+        mock_cleanup.assert_called_once_with("os-session", Path("/some/project"))
+
+
+class TestDeleteUsesWorkspacePath:
+    """Tests for delete using stored workspace path for git remote cleanup."""
+
+    @patch("paude.cli.remote.subprocess.run")
+    @patch("paude.git_remote.is_git_repository")
+    @patch("paude.cli.helpers.PodmanBackend")
+    def test_delete_cleans_remote_from_workspace_dir(
+        self,
+        mock_podman_class: MagicMock,
+        mock_is_git: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ):
+        """Delete removes git remote from stored workspace directory."""
+        mock_is_git.return_value = True
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_podman = MagicMock()
+        mock_podman.get_session.return_value = MagicMock(workspace=tmp_path)
+        mock_podman_class.return_value = mock_podman
+
+        result = runner.invoke(
+            app, ["delete", "my-session", "--confirm", "--backend=podman"]
+        )
+
+        assert result.exit_code == 0
+        assert "Removed git remote 'paude-my-session'." in result.output
+        mock_run.assert_called_once_with(
+            ["git", "remote", "remove", "paude-my-session"],
+            capture_output=True,
+            text=True,
+            cwd=tmp_path,
+        )
+
+    @patch("paude.cli.remote.subprocess.run")
+    @patch("paude.git_remote.is_git_repository")
+    @patch("paude.cli.helpers.PodmanBackend")
+    def test_delete_falls_back_to_cwd_when_workspace_not_git(
+        self,
+        mock_podman_class: MagicMock,
+        mock_is_git: MagicMock,
+        mock_run: MagicMock,
+        tmp_path: Path,
+    ):
+        """Delete falls back to current dir when workspace is not a git repo."""
+        # Workspace is not a git repo, current dir is
+        mock_is_git.side_effect = lambda cwd=None: cwd is None
+        mock_run.return_value = MagicMock(returncode=0, stderr="")
+        mock_podman = MagicMock()
+        mock_podman.get_session.return_value = MagicMock(workspace=tmp_path)
+        mock_podman_class.return_value = mock_podman
+
+        result = runner.invoke(
+            app, ["delete", "my-session", "--confirm", "--backend=podman"]
+        )
+
+        assert result.exit_code == 0
+        mock_run.assert_called_once_with(
+            ["git", "remote", "remove", "paude-my-session"],
+            capture_output=True,
+            text=True,
+            cwd=None,
+        )
+
+    @patch("paude.cli.remote._cleanup_session_git_remote")
+    @patch("paude.cli.helpers.PodmanBackend")
+    def test_delete_passes_none_workspace_when_session_not_found(
+        self,
+        mock_podman_class: MagicMock,
+        mock_cleanup: MagicMock,
+    ):
+        """Delete passes None workspace when get_session returns None."""
+        mock_podman = MagicMock()
+        mock_podman.get_session.return_value = None
+        mock_podman_class.return_value = mock_podman
+
+        result = runner.invoke(
+            app, ["delete", "my-session", "--confirm", "--backend=podman"]
+        )
+
+        assert result.exit_code == 0
+        mock_cleanup.assert_called_once_with("my-session", None)
+
+
+class TestRemoteCleanup:
+    """Tests for paude remote cleanup command."""
+
+    @patch("paude.session_discovery.collect_all_sessions")
+    @patch("paude.git_remote.list_paude_remotes")
+    @patch("paude.git_remote.is_git_repository")
+    def test_cleanup_removes_orphaned_remotes(
+        self,
+        mock_is_git: MagicMock,
+        mock_list_remotes: MagicMock,
+        mock_collect: MagicMock,
+    ):
+        """Cleanup removes remotes for sessions that no longer exist."""
+        mock_is_git.return_value = True
+        mock_list_remotes.return_value = [
+            ("paude-active", "ext::podman exec paude-active %S /pvc/workspace"),
+            ("paude-orphan", "ext::podman exec paude-orphan %S /pvc/workspace"),
+        ]
+        active_session = MagicMock()
+        active_session.name = "active"
+        mock_collect.return_value = [(active_session, MagicMock())]
+
+        with patch("paude.git_remote.git_remote_remove", return_value=True) as mock_rm:
+            result = runner.invoke(app, ["remote", "cleanup"])
+
+        assert result.exit_code == 0
+        mock_rm.assert_called_once_with("paude-orphan")
+        assert "Removed orphaned remote 'paude-orphan'" in result.stdout
+        assert "Removed 1 orphaned remote(s)." in result.stdout
+
+    @patch("paude.session_discovery.collect_all_sessions")
+    @patch("paude.git_remote.list_paude_remotes")
+    @patch("paude.git_remote.is_git_repository")
+    def test_cleanup_no_orphans(
+        self,
+        mock_is_git: MagicMock,
+        mock_list_remotes: MagicMock,
+        mock_collect: MagicMock,
+    ):
+        """Cleanup reports when no orphaned remotes found."""
+        mock_is_git.return_value = True
+        mock_list_remotes.return_value = [
+            ("paude-active", "ext::podman exec paude-active %S /pvc/workspace"),
+        ]
+        active_session = MagicMock()
+        active_session.name = "active"
+        mock_collect.return_value = [(active_session, MagicMock())]
+
+        result = runner.invoke(app, ["remote", "cleanup"])
+
+        assert result.exit_code == 0
+        assert "No orphaned remotes found." in result.stdout
+
+    @patch("paude.git_remote.list_paude_remotes")
+    @patch("paude.git_remote.is_git_repository")
+    def test_cleanup_no_remotes(
+        self,
+        mock_is_git: MagicMock,
+        mock_list_remotes: MagicMock,
+    ):
+        """Cleanup reports when no paude remotes exist."""
+        mock_is_git.return_value = True
+        mock_list_remotes.return_value = []
+
+        result = runner.invoke(app, ["remote", "cleanup"])
+
+        assert result.exit_code == 0
+        assert "No paude git remotes found." in result.stdout
+
+    @patch("paude.session_discovery.collect_all_sessions")
+    @patch("paude.git_remote.list_paude_remotes")
+    @patch("paude.git_remote.is_git_repository")
+    def test_cleanup_removes_multiple_orphans(
+        self,
+        mock_is_git: MagicMock,
+        mock_list_remotes: MagicMock,
+        mock_collect: MagicMock,
+    ):
+        """Cleanup removes multiple orphaned remotes."""
+        mock_is_git.return_value = True
+        mock_list_remotes.return_value = [
+            ("paude-gone1", "ext::podman exec paude-gone1 %S /pvc/workspace"),
+            ("paude-gone2", "ext::podman exec paude-gone2 %S /pvc/workspace"),
+        ]
+        mock_collect.return_value = []
+
+        with patch("paude.git_remote.git_remote_remove", return_value=True) as mock_rm:
+            result = runner.invoke(app, ["remote", "cleanup"])
+
+        assert result.exit_code == 0
+        assert mock_rm.call_count == 2
+        assert "Removed 2 orphaned remote(s)." in result.stdout
 
 
 class TestParseCopyPath:

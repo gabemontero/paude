@@ -64,7 +64,7 @@ def session_delete(
     ] = None,
 ) -> None:
     """Delete a session and all its resources permanently."""
-    from paude.cli.remote import _cleanup_session_git_remote
+    from paude.cli.remote import _cleanup_session_git_remote, _get_session_workspace
 
     if not confirm:
         typer.echo(
@@ -79,10 +79,11 @@ def session_delete(
         result = find_session_backend(name, openshift_context, openshift_namespace)
         if result:
             backend, backend_obj = result
+            workspace = _get_session_workspace(backend_obj, name)
             try:
                 backend_obj.delete_session(name, confirm=True)
                 typer.echo(f"Session '{name}' deleted.")
-                _cleanup_session_git_remote(name)
+                _cleanup_session_git_remote(name, workspace)
                 return
             except Exception as e:
                 typer.echo(f"Error deleting session: {e}", err=True)
@@ -94,10 +95,11 @@ def session_delete(
     backend_instance = _get_backend_instance(
         backend, openshift_context, openshift_namespace
     )
+    workspace = _get_session_workspace(backend_instance, name)
     try:
         backend_instance.delete_session(name, confirm=True)
         typer.echo(f"Session '{name}' deleted.")
-        _cleanup_session_git_remote(name)
+        _cleanup_session_git_remote(name, workspace)
     except (SessionNotFoundError, OpenshiftSessionNotFoundError) as e:
         typer.echo(f"Error: {e}", err=True)
         raise typer.Exit(1) from None

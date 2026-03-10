@@ -126,11 +126,12 @@ def git_remote_add(remote_name: str, remote_url: str) -> bool:
     return True
 
 
-def git_remote_remove(remote_name: str) -> bool:
+def git_remote_remove(remote_name: str, cwd: Path | None = None) -> bool:
     """Remove a git remote.
 
     Args:
         remote_name: Name of the remote to remove.
+        cwd: Working directory for the command.
 
     Returns:
         True if successful, False if failed.
@@ -139,6 +140,7 @@ def git_remote_remove(remote_name: str) -> bool:
         ["git", "remote", "remove", remote_name],
         capture_output=True,
         text=True,
+        cwd=cwd,
     )
 
     if result.returncode != 0:
@@ -151,8 +153,11 @@ def git_remote_remove(remote_name: str) -> bool:
     return True
 
 
-def list_paude_remotes() -> list[tuple[str, str]]:
+def list_paude_remotes(cwd: Path | None = None) -> list[tuple[str, str]]:
     """List all paude git remotes.
+
+    Args:
+        cwd: Working directory for the command.
 
     Returns:
         List of (remote_name, remote_url) tuples for remotes starting with "paude-".
@@ -161,6 +166,7 @@ def list_paude_remotes() -> list[tuple[str, str]]:
         ["git", "remote", "-v"],
         capture_output=True,
         text=True,
+        cwd=cwd,
     )
 
     if result.returncode != 0:
@@ -186,8 +192,11 @@ def list_paude_remotes() -> list[tuple[str, str]]:
     return remotes
 
 
-def is_git_repository() -> bool:
-    """Check if current directory is a git repository.
+def is_git_repository(cwd: Path | None = None) -> bool:
+    """Check if a directory is a git repository.
+
+    Args:
+        cwd: Directory to check. Defaults to current directory.
 
     Returns:
         True if in a git repository, False otherwise.
@@ -196,6 +205,7 @@ def is_git_repository() -> bool:
         ["git", "rev-parse", "--is-inside-work-tree"],
         capture_output=True,
         text=True,
+        cwd=cwd,
     )
     return result.returncode == 0
 

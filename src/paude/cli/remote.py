@@ -53,6 +53,7 @@ def remote_command(
       add [NAME]     Add a git remote for a session (uses ext:: protocol)
       list           List all paude git remotes
       remove [NAME]  Remove a git remote for a session
+      cleanup        Remove remotes whose sessions no longer exist
     """
     from paude.git_remote import (
         git_remote_remove,
@@ -109,29 +110,59 @@ def remote_command(
             raise typer.Exit(1)
         return
 
+    if action == "cleanup":
+        if not is_git_repository():
+            typer.echo("Error: Not a git repository.", err=True)
+            raise typer.Exit(1)
+
+        _remote_cleanup(openshift_context, openshift_namespace)
+        return
+
     typer.echo(f"Unknown action: {action}", err=True)
-    typer.echo("Valid actions: add, list, remove", err=True)
+    typer.echo("Valid actions: add, list, remove, cleanup", err=True)
     raise typer.Exit(1)
 
 
-def _cleanup_session_git_remote(session_name: str) -> None:
-    """Remove git remote for a session if it exists in current directory.
+def _get_session_workspace(backend: Backend, name: str) -> Path | None:
+    """Get the workspace path for a session, or None if unavailable."""
+    try:
+        session = backend.get_session(name)
+        if session is not None:
+            return session.workspace
+    except Exception:  # noqa: S110
+        pass
+    return None
+
+
+def _cleanup_session_git_remote(
+    session_name: str, workspace: Path | None = None
+) -> None:
+    """Remove git remote for a session from the workspace directory.
+
+    Uses the stored workspace path to find and remove the remote, falling back
+    to the current directory if workspace is unavailable.
 
     This is called after session deletion to clean up any associated git remote.
     Failures are silently ignored to not disrupt the deletion workflow.
     """
     from paude.git_remote import is_git_repository
 
-    if not is_git_repository():
-        return
-
     remote_name = f"paude-{session_name}"
 
-    # Run git remote remove directly to handle "No such remote" silently
+    # Try workspace directory first, then fall back to current directory
+    cwd = None
+    if workspace is not None and workspace.is_dir() and is_git_repository(workspace):
+        cwd = workspace
+    elif is_git_repository():
+        cwd = None  # use current directory
+    else:
+        return
+
     result = subprocess.run(
         ["git", "remote", "remove", remote_name],
         capture_output=True,
         text=True,
+        cwd=cwd,
     )
 
     if result.returncode == 0:
@@ -140,6 +171,39 @@ def _cleanup_session_git_remote(session_name: str) -> None:
         # Warn about unexpected failures, but don't fail the delete
         err_msg = result.stderr.strip()
         typer.echo(f"Warning: Failed to remove git remote: {err_msg}", err=True)
+
+
+def _remote_cleanup(
+    openshift_context: str | None,
+    openshift_namespace: str | None,
+) -> None:
+    """Remove paude git remotes whose sessions no longer exist."""
+    from paude.git_remote import git_remote_remove, list_paude_remotes
+    from paude.session_discovery import collect_all_sessions
+
+    remotes = list_paude_remotes()
+    if not remotes:
+        typer.echo("No paude git remotes found.")
+        return
+
+    # Collect all active session names
+    active_sessions: set[str] = set()
+    for session, _ in collect_all_sessions(openshift_context, openshift_namespace):
+        active_sessions.add(session.name)
+
+    removed = 0
+    for remote_name, _ in remotes:
+        # Remote name is "paude-{session_name}"
+        session_name = remote_name.removeprefix("paude-")
+        if session_name not in active_sessions:
+            if git_remote_remove(remote_name):
+                typer.echo(f"Removed orphaned remote '{remote_name}'.")
+                removed += 1
+
+    if removed == 0:
+        typer.echo("No orphaned remotes found.")
+    else:
+        typer.echo(f"Removed {removed} orphaned remote(s).")
 
 
 def _find_session_for_remote(
