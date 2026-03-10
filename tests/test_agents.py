@@ -385,9 +385,22 @@ class TestGeminiAgentSandboxConfig:
         script = GeminiAgent().apply_sandbox_config("/home/paude", "/workspace", "")
         assert script.startswith("#!/bin/bash")
 
-    def test_contains_true(self) -> None:
+    def test_contains_trusted_folders_json(self) -> None:
         script = GeminiAgent().apply_sandbox_config("/home/paude", "/workspace", "")
-        assert "true" in script
+        assert "trustedFolders.json" in script
+
+    def test_uses_jq_for_trust(self) -> None:
+        script = GeminiAgent().apply_sandbox_config("/home/paude", "/workspace", "")
+        assert "jq" in script
+        assert "TRUST_FOLDER" in script
+
+    def test_workspace_path_parameterized(self) -> None:
+        script = GeminiAgent().apply_sandbox_config("/home/paude", "/pvc/workspace", "")
+        assert "/pvc/workspace" in script
+
+    def test_home_path_parameterized(self) -> None:
+        script = GeminiAgent().apply_sandbox_config("/custom/home", "/workspace", "")
+        assert "/custom/home/.gemini" in script
 
 
 class TestBuildEnvironmentFromConfig:

@@ -265,36 +265,54 @@ apply_sandbox_config() {
         return 0
     fi
 
-    # Fallback: built-in Claude Code sandbox config
+    # Fallback: built-in sandbox config keyed on agent
     local workspace="${PAUDE_WORKSPACE:-/workspace}"
-    local config_file="$HOME/$AGENT_CONFIG_FILE"
-    local settings_json="$HOME/$AGENT_CONFIG_DIR/settings.json"
 
-    # Suppress trust prompt and onboarding
-    if [[ -f "$config_file" ]]; then
-        jq --arg ws "$workspace" '. * {
-            hasCompletedOnboarding: true,
-            projects: {($ws): {hasTrustDialogAccepted: true}}
-        }' "$config_file" > "${config_file}.tmp" \
-            && mv "${config_file}.tmp" "$config_file"
-    else
-        jq -n --arg ws "$workspace" '{
-            hasCompletedOnboarding: true,
-            projects: {($ws): {hasTrustDialogAccepted: true}}
-        }' > "$config_file"
-    fi
+    case "$AGENT_NAME" in
+        gemini)
+            # Pre-trust workspace folder so Gemini doesn't prompt on every connect
+            local trusted_json="$HOME/$AGENT_CONFIG_DIR/trustedFolders.json"
+            mkdir -p "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
+            if [[ -f "$trusted_json" ]]; then
+                jq --arg ws "$workspace" '. + {($ws): "TRUST_FOLDER"}' \
+                    "$trusted_json" > "${trusted_json}.tmp" \
+                    && mv "${trusted_json}.tmp" "$trusted_json"
+            else
+                jq -n --arg ws "$workspace" '{($ws): "TRUST_FOLDER"}' > "$trusted_json"
+            fi
+            ;;
+        *)
+            # Claude Code sandbox config
+            local config_file="$HOME/$AGENT_CONFIG_FILE"
+            local settings_json="$HOME/$AGENT_CONFIG_DIR/settings.json"
 
-    # Suppress bypass permissions warning when yolo flag is in args
-    if [[ "${AGENT_ARGS:-}" == *"--dangerously-skip-permissions"* ]]; then
-        mkdir -p "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
-        local skip_patch='{"skipDangerousModePermissionPrompt": true}'
-        if [[ -f "$settings_json" ]]; then
-            jq --argjson patch "$skip_patch" '. * $patch' "$settings_json" > "${settings_json}.tmp" \
-                && mv "${settings_json}.tmp" "$settings_json"
-        else
-            echo "$skip_patch" > "$settings_json"
-        fi
-    fi
+            # Suppress trust prompt and onboarding
+            if [[ -f "$config_file" ]]; then
+                jq --arg ws "$workspace" '. * {
+                    hasCompletedOnboarding: true,
+                    projects: {($ws): {hasTrustDialogAccepted: true}}
+                }' "$config_file" > "${config_file}.tmp" \
+                    && mv "${config_file}.tmp" "$config_file"
+            else
+                jq -n --arg ws "$workspace" '{
+                    hasCompletedOnboarding: true,
+                    projects: {($ws): {hasTrustDialogAccepted: true}}
+                }' > "$config_file"
+            fi
+
+            # Suppress bypass permissions warning when yolo flag is in args
+            if [[ "${AGENT_ARGS:-}" == *"--dangerously-skip-permissions"* ]]; then
+                mkdir -p "$HOME/$AGENT_CONFIG_DIR" 2>/dev/null || true
+                local skip_patch='{"skipDangerousModePermissionPrompt": true}'
+                if [[ -f "$settings_json" ]]; then
+                    jq --argjson patch "$skip_patch" '. * $patch' "$settings_json" > "${settings_json}.tmp" \
+                        && mv "${settings_json}.tmp" "$settings_json"
+                else
+                    echo "$skip_patch" > "$settings_json"
+                fi
+            fi
+            ;;
+    esac
 }
 
 apply_sandbox_config 2>/dev/null || true
