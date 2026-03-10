@@ -166,7 +166,11 @@ def session_create(
         from paude.dry_run import show_dry_run
 
         parsed_args = _parse_agent_args(claude_args)
-        expanded = _expand_allowed_domains(allowed_domains)
+        agent_instance = get_agent(agent)
+        expanded = _expand_allowed_domains(
+            allowed_domains,
+            extra_aliases=agent_instance.config.extra_domain_aliases,
+        )
         flags = {
             "yolo": yolo,
             "allowed_domains": expanded,

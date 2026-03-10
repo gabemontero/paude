@@ -39,6 +39,7 @@ class GeminiAgent:
             activity_files=[],
             yolo_flag=None,
             clear_command=None,
+            extra_domain_aliases=["gemini", "nodejs"],
         )
 
     @property

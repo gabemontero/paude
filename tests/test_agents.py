@@ -67,6 +67,7 @@ class TestAgentConfig:
         assert cfg.passthrough_env_prefixes == []
         assert cfg.config_excludes == []
         assert cfg.activity_files == []
+        assert cfg.extra_domain_aliases == ["claude"]
 
 
 class TestClaudeAgentConfig:
@@ -113,6 +114,10 @@ class TestClaudeAgentConfig:
     def test_passthrough_vars(self) -> None:
         cfg = ClaudeAgent().config
         assert "CLAUDE_CODE_USE_VERTEX" in cfg.passthrough_env_vars
+
+    def test_extra_domain_aliases(self) -> None:
+        cfg = ClaudeAgent().config
+        assert cfg.extra_domain_aliases == ["claude"]
 
     def test_passthrough_prefixes(self) -> None:
         cfg = ClaudeAgent().config
@@ -275,6 +280,11 @@ class TestGeminiAgentConfig:
     def test_passthrough_prefixes(self) -> None:
         cfg = GeminiAgent().config
         assert "CLOUDSDK_AUTH_" in cfg.passthrough_env_prefixes
+
+    def test_extra_domain_aliases(self) -> None:
+        cfg = GeminiAgent().config
+        assert "gemini" in cfg.extra_domain_aliases
+        assert "nodejs" in cfg.extra_domain_aliases
 
     def test_env_vars_empty(self) -> None:
         assert GeminiAgent().config.env_vars == {}

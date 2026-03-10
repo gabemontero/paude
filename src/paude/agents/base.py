@@ -50,6 +50,7 @@ class AgentConfig:
     yolo_flag: str | None = "--dangerously-skip-permissions"
     clear_command: str | None = "/clear"
     args_env_var: str = "PAUDE_AGENT_ARGS"
+    extra_domain_aliases: list[str] = field(default_factory=lambda: ["claude"])
 
 
 def build_environment_from_config(config: AgentConfig) -> dict[str, str]:

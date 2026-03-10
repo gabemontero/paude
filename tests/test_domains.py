@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from paude.domains import (
+    BASE_ALIASES,
     DEFAULT_ALIASES,
     DOMAIN_ALIASES,
     expand_domains,
@@ -466,3 +467,104 @@ class TestGithubAlias:
         result = expand_domains(["github", "github"])
         assert result is not None
         assert len(result) == len(set(result))
+
+
+class TestGeminiAlias:
+    """Tests for the 'gemini' domain alias."""
+
+    def test_gemini_alias_exists(self):
+        """'gemini' alias exists in DOMAIN_ALIASES."""
+        assert "gemini" in DOMAIN_ALIASES
+
+    def test_gemini_not_in_defaults(self):
+        """'gemini' is NOT in DEFAULT_ALIASES (opt-in only)."""
+        assert "gemini" not in DEFAULT_ALIASES
+
+    def test_gemini_expands_to_correct_domains(self):
+        """'gemini' expands to Gemini-specific API domains."""
+        result = expand_domains(["gemini"])
+        assert result is not None
+        assert "cloudcode-pa.googleapis.com" in result
+        assert "play.googleapis.com" in result
+
+    def test_gemini_in_format_display(self):
+        """format_domains_for_display recognizes gemini alias."""
+        domains = expand_domains(["gemini"])
+        assert domains is not None
+        result = format_domains_for_display(domains)
+        assert "gemini" in result
+
+
+class TestBaseAliases:
+    """Tests for BASE_ALIASES constant."""
+
+    def test_base_aliases_defined(self):
+        """BASE_ALIASES references valid aliases."""
+        for alias in BASE_ALIASES:
+            assert alias in DOMAIN_ALIASES
+
+    def test_base_aliases_does_not_include_claude(self):
+        """BASE_ALIASES does not include agent-specific aliases."""
+        assert "claude" not in BASE_ALIASES
+        assert "gemini" not in BASE_ALIASES
+
+    def test_base_aliases_includes_shared(self):
+        """BASE_ALIASES includes shared aliases."""
+        assert "vertexai" in BASE_ALIASES
+        assert "python" in BASE_ALIASES
+        assert "github" in BASE_ALIASES
+
+
+class TestExpandDomainsWithExtraAliases:
+    """Tests for expand_domains with extra_aliases parameter."""
+
+    def test_extra_aliases_none_uses_default(self):
+        """extra_aliases=None falls back to DEFAULT_ALIASES."""
+        result = expand_domains(["default"], extra_aliases=None)
+        assert result is not None
+        for domain in DOMAIN_ALIASES["claude"]:
+            assert domain in result
+
+    def test_extra_aliases_empty_uses_base_only(self):
+        """extra_aliases=[] uses only BASE_ALIASES."""
+        result = expand_domains(["default"], extra_aliases=[])
+        assert result is not None
+        for domain in DOMAIN_ALIASES["vertexai"]:
+            assert domain in result
+        for domain in DOMAIN_ALIASES["claude"]:
+            assert domain not in result
+
+    def test_extra_aliases_claude(self):
+        """extra_aliases=['claude'] includes same domains as DEFAULT_ALIASES."""
+        default_result = expand_domains(["default"])
+        extra_result = expand_domains(["default"], extra_aliases=["claude"])
+        assert default_result is not None
+        assert extra_result is not None
+        assert set(default_result) == set(extra_result)
+
+    def test_extra_aliases_gemini_nodejs(self):
+        """extra_aliases=['gemini', 'nodejs'] adds gemini and nodejs to base."""
+        result = expand_domains(["default"], extra_aliases=["gemini", "nodejs"])
+        assert result is not None
+        # Base aliases present
+        for domain in DOMAIN_ALIASES["vertexai"]:
+            assert domain in result
+        for domain in DOMAIN_ALIASES["python"]:
+            assert domain in result
+        for domain in DOMAIN_ALIASES["github"]:
+            assert domain in result
+        # Gemini extras present
+        for domain in DOMAIN_ALIASES["gemini"]:
+            assert domain in result
+        for domain in DOMAIN_ALIASES["nodejs"]:
+            assert domain in result
+        # Claude NOT present
+        for domain in DOMAIN_ALIASES["claude"]:
+            assert domain not in result
+
+    def test_extra_aliases_does_not_affect_explicit_aliases(self):
+        """extra_aliases only affects 'default', not explicit alias usage."""
+        result = expand_domains(["claude"], extra_aliases=["gemini"])
+        assert result is not None
+        for domain in DOMAIN_ALIASES["claude"]:
+            assert domain in result
