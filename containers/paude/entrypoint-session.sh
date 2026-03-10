@@ -356,6 +356,6 @@ else
     tmux -u new-session -s "$SESSION_NAME" -d "bash -l"
     tmux send-keys -t "$SESSION_NAME" "export HOME=$HOME PATH=$HOME/.local/bin:\$PATH" Enter
     tmux send-keys -t "$SESSION_NAME" "cd $WORKSPACE" Enter
-    tmux send-keys -t "$SESSION_NAME" "$AGENT_LAUNCH_CMD $AGENT_ARGS" Enter
+    tmux send-keys -t "$SESSION_NAME" "clear && $AGENT_LAUNCH_CMD $AGENT_ARGS" Enter
     exec tmux -u attach -t "$SESSION_NAME"
 fi
