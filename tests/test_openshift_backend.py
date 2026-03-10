@@ -3275,3 +3275,61 @@ class TestBuildConfigNamePrefix:
         assert len(get_calls) >= 1
         cmd = get_calls[0][0][0]
         assert "paude-proxy-abc123" in str(cmd)
+
+
+class TestEnsureImageViaBuildPassesAgent:
+    """Tests for ensure_image_via_build passing agent to prepare_build_context."""
+
+    @pytest.mark.parametrize(
+        ("agent_name", "expected_type"),
+        [
+            ("gemini", "GeminiAgent"),
+            ("claude", "ClaudeAgent"),
+        ],
+    )
+    @patch("subprocess.run")
+    def test_passes_agent_to_prepare_build_context(
+        self,
+        mock_run: MagicMock,
+        tmp_path: Path,
+        agent_name: str,
+        expected_type: str,
+    ) -> None:
+        """ensure_image_via_build passes the given agent to prepare_build_context."""
+        from paude.agents import get_agent
+        from paude.container.build_context import BuildContext
+
+        mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="not found")
+
+        backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
+
+        with patch.object(backend._builder, "start_binary_build") as mock_start_build:
+            with patch.object(backend._builder, "wait_for_build"):
+                with patch.object(
+                    backend._builder, "get_imagestream_reference"
+                ) as mock_get_ref:
+                    with patch.object(backend._builder, "create_build_config"):
+                        mock_start_build.return_value = "paude-abc123-1"
+                        mock_get_ref.return_value = (
+                            "image-registry.svc:5000/ns/paude-abc123:latest"
+                        )
+
+                        with patch(
+                            "paude.container.image.prepare_build_context"
+                        ) as mock_prep:
+                            mock_prep.return_value = BuildContext(
+                                context_dir=tmp_path,
+                                dockerfile_path=tmp_path / "Dockerfile",
+                                config_hash="abc123",
+                                base_image="ubuntu:22.04",
+                            )
+
+                            backend.ensure_image_via_build(
+                                config=None,
+                                workspace=tmp_path,
+                                agent=get_agent(agent_name),
+                            )
+
+                            mock_prep.assert_called_once()
+                            agent_arg = mock_prep.call_args.kwargs.get("agent")
+                            assert type(agent_arg).__name__ == expected_type

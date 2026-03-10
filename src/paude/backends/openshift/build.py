@@ -10,7 +10,10 @@ import sys
 import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from paude.agents.base import Agent
 
 from paude.backends.openshift.config import OpenShiftConfig
 from paude.backends.openshift.exceptions import (
@@ -303,6 +306,7 @@ class BuildOrchestrator:
         script_dir: Path | None = None,
         force_rebuild: bool = False,
         session_name: str | None = None,
+        agent: Agent | None = None,
     ) -> str:
         """Ensure an image is available via OpenShift binary build.
 
@@ -312,6 +316,7 @@ class BuildOrchestrator:
             script_dir: Path to paude script directory (for dev mode).
             force_rebuild: Force rebuild even if image exists.
             session_name: Optional session name to label the build with.
+            agent: Agent instance for Dockerfile generation.
 
         Returns:
             Internal image reference for pod image pulls.
@@ -329,6 +334,7 @@ class BuildOrchestrator:
             script_dir=script_dir,
             platform="linux/amd64",
             for_remote_build=True,
+            agent=agent,
         )
 
         try:
