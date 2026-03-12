@@ -13,7 +13,10 @@ app = typer.Typer(
     name="paude",
     help="Run AI coding agents in isolated containers.",
     add_completion=False,
-    context_settings={"allow_interspersed_args": False},
+    context_settings={
+        "allow_interspersed_args": False,
+        "help_option_names": ["-h", "--help"],
+    },
 )
 
 
