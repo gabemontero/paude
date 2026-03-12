@@ -64,15 +64,15 @@ class TestOpenShiftBackend:
 
 
 class TestRunOc:
-    """Tests for _run_oc method."""
+    """Tests for _oc.run method."""
 
     @patch("subprocess.run")
     def test_run_oc_builds_command(self, mock_run: MagicMock) -> None:
-        """_run_oc builds correct command."""
+        """_oc.run builds correct command."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._run_oc("get", "pods")
+        backend._oc.run("get", "pods")
 
         mock_run.assert_called_once()
         args = mock_run.call_args[0][0]
@@ -80,28 +80,28 @@ class TestRunOc:
 
     @patch("subprocess.run")
     def test_run_oc_includes_context(self, mock_run: MagicMock) -> None:
-        """_run_oc includes context when specified."""
+        """_oc.run includes context when specified."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         config = OpenShiftConfig(context="my-context")
         backend = OpenShiftBackend(config=config)
-        backend._run_oc("get", "pods")
+        backend._oc.run("get", "pods")
 
         args = mock_run.call_args[0][0]
         assert args == ["oc", "--context", "my-context", "get", "pods"]
 
     @patch("subprocess.run")
     def test_run_oc_raises_on_not_installed(self, mock_run: MagicMock) -> None:
-        """_run_oc raises OcNotInstalledError when oc not found."""
+        """_oc.run raises OcNotInstalledError when oc not found."""
         mock_run.side_effect = FileNotFoundError()
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
         with pytest.raises(OcNotInstalledError):
-            backend._run_oc("version")
+            backend._oc.run("version")
 
     @patch("subprocess.run")
     def test_run_oc_raises_on_not_logged_in(self, mock_run: MagicMock) -> None:
-        """_run_oc raises OcNotLoggedInError when not logged in."""
+        """_oc.run raises OcNotLoggedInError when not logged in."""
         mock_run.return_value = MagicMock(
             returncode=1,
             stdout="",
@@ -110,15 +110,15 @@ class TestRunOc:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
         with pytest.raises(OcNotLoggedInError):
-            backend._run_oc("whoami")
+            backend._oc.run("whoami")
 
     @patch("subprocess.run")
     def test_run_oc_passes_input(self, mock_run: MagicMock) -> None:
-        """_run_oc passes input data to subprocess."""
+        """_oc.run passes input data to subprocess."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._run_oc("apply", "-f", "-", input_data='{"kind":"Pod"}')
+        backend._oc.run("apply", "-f", "-", input_data='{"kind":"Pod"}')
 
         mock_run.assert_called_once()
         assert mock_run.call_args[1]["input"] == '{"kind":"Pod"}'
@@ -133,47 +133,47 @@ class TestRunOc:
 
     @patch("subprocess.run")
     def test_run_oc_uses_default_timeout(self, mock_run: MagicMock) -> None:
-        """_run_oc uses default timeout when none specified."""
+        """_oc.run uses default timeout when none specified."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._run_oc("get", "pods")
+        backend._oc.run("get", "pods")
 
         mock_run.assert_called_once()
         assert mock_run.call_args[1]["timeout"] == OpenShiftBackend.OC_DEFAULT_TIMEOUT
 
     @patch("subprocess.run")
     def test_run_oc_uses_custom_timeout(self, mock_run: MagicMock) -> None:
-        """_run_oc uses custom timeout when specified."""
+        """_oc.run uses custom timeout when specified."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._run_oc("get", "pods", timeout=60)
+        backend._oc.run("get", "pods", timeout=60)
 
         mock_run.assert_called_once()
         assert mock_run.call_args[1]["timeout"] == 60
 
     @patch("subprocess.run")
     def test_run_oc_no_timeout_when_zero(self, mock_run: MagicMock) -> None:
-        """_run_oc disables timeout when 0 is specified."""
+        """_oc.run disables timeout when 0 is specified."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._run_oc("get", "pods", timeout=0)
+        backend._oc.run("get", "pods", timeout=0)
 
         mock_run.assert_called_once()
         assert mock_run.call_args[1]["timeout"] is None
 
     @patch("subprocess.run")
     def test_run_oc_raises_on_timeout(self, mock_run: MagicMock) -> None:
-        """_run_oc raises OcTimeoutError when command times out."""
+        """_oc.run raises OcTimeoutError when command times out."""
         mock_run.side_effect = subprocess.TimeoutExpired(
             cmd=["oc", "get", "pods"], timeout=30
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
         with pytest.raises(OcTimeoutError) as exc_info:
-            backend._run_oc("get", "pods")
+            backend._oc.run("get", "pods")
 
         assert "timed out" in str(exc_info.value)
         assert "oc get pods" in str(exc_info.value)
@@ -181,26 +181,26 @@ class TestRunOc:
 
 
 class TestCheckConnection:
-    """Tests for _check_connection method."""
+    """Tests for _oc.check_connection method."""
 
     @patch("subprocess.run")
     def test_returns_true_when_logged_in(self, mock_run: MagicMock) -> None:
-        """_check_connection returns True when logged in."""
+        """_oc.check_connection returns True when logged in."""
         mock_run.return_value = MagicMock(returncode=0, stdout="user", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        result = backend._check_connection()
+        result = backend._oc.check_connection()
 
         assert result is True
 
     @patch("subprocess.run")
     def test_raises_when_not_logged_in(self, mock_run: MagicMock) -> None:
-        """_check_connection raises when not logged in."""
+        """_oc.check_connection raises when not logged in."""
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
         with pytest.raises(OcNotLoggedInError):
-            backend._check_connection()
+            backend._oc.check_connection()
 
 
 class TestListSessions:
@@ -479,7 +479,7 @@ class TestOpenShiftStartSession:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         # Mock wait_for_pod_ready and connect_session to avoid actual waits
-        with patch.object(backend, "_wait_for_pod_ready"):
+        with patch.object(backend._pod_waiter, "wait_for_ready"):
             with patch.object(backend, "connect_session", return_value=0):
                 exit_code = backend.start_session("test")
 
@@ -533,8 +533,8 @@ class TestOpenShiftStartSession:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        with patch.object(backend, "_wait_for_pod_ready"):
-            with patch.object(backend, "_wait_for_proxy_ready"):
+        with patch.object(backend._pod_waiter, "wait_for_ready"):
+            with patch.object(backend._proxy, "wait_for_ready"):
                 with patch.object(backend, "connect_session", return_value=0):
                     exit_code = backend.start_session("test")
 
@@ -1029,11 +1029,11 @@ class TestBuildFailedError:
 
 
 class TestCreateBuildConfig:
-    """Tests for _create_build_config method."""
+    """Tests for _builder.create_build_config method."""
 
     @patch("subprocess.run")
     def test_creates_buildconfig_and_imagestream(self, mock_run: MagicMock) -> None:
-        """_create_build_config creates BuildConfig and ImageStream."""
+        """_builder.create_build_config creates BuildConfig and ImageStream."""
 
         def run_side_effect(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("args", [])
@@ -1046,7 +1046,7 @@ class TestCreateBuildConfig:
         mock_run.side_effect = run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._create_build_config("abc123")
+        backend._builder.create_build_config("abc123")
 
         # Should have called oc apply twice (ImageStream and BuildConfig)
         calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
@@ -1054,11 +1054,11 @@ class TestCreateBuildConfig:
 
     @patch("subprocess.run")
     def test_skips_if_buildconfig_exists(self, mock_run: MagicMock) -> None:
-        """_create_build_config skips if BuildConfig already exists."""
+        """_builder.create_build_config skips if BuildConfig already exists."""
         mock_run.return_value = MagicMock(returncode=0, stdout="{}", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._create_build_config("abc123")
+        backend._builder.create_build_config("abc123")
 
         # Should only have called get, not apply
         calls = mock_run.call_args_list
@@ -1069,19 +1069,19 @@ class TestCreateBuildConfig:
 
 
 class TestStartBinaryBuild:
-    """Tests for _start_binary_build method."""
+    """Tests for _builder.start_binary_build method."""
 
     @patch("subprocess.run")
     def test_starts_build_with_from_dir(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_start_binary_build uses --from-dir option."""
+        """_builder.start_binary_build uses --from-dir option."""
         mock_run.return_value = MagicMock(
             returncode=0, stdout="build/paude-abc123-1 started", stderr=""
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        build_name = backend._start_binary_build("abc123", tmp_path)
+        build_name = backend._builder.start_binary_build("abc123", tmp_path)
 
         assert "paude-abc123-1" in build_name
 
@@ -1096,13 +1096,15 @@ class TestStartBinaryBuild:
     def test_labels_build_with_session_name(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_start_binary_build labels build when session_name provided."""
+        """_builder.start_binary_build labels build when session_name provided."""
         mock_run.return_value = MagicMock(
             returncode=0, stdout="build/paude-abc123-1 started", stderr=""
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._start_binary_build("abc123", tmp_path, session_name="my-session")
+        backend._builder.start_binary_build(
+            "abc123", tmp_path, session_name="my-session"
+        )
 
         # Verify label command was called (look for "label" as a command, not substring)
         calls = mock_run.call_args_list
@@ -1123,13 +1125,13 @@ class TestStartBinaryBuild:
     def test_does_not_label_when_session_name_is_none(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_start_binary_build does not label when session_name is None."""
+        """_builder.start_binary_build does not label when session_name is None."""
         mock_run.return_value = MagicMock(
             returncode=0, stdout="build/paude-abc123-1 started", stderr=""
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._start_binary_build("abc123", tmp_path, session_name=None)
+        backend._builder.start_binary_build("abc123", tmp_path, session_name=None)
 
         # Verify no label command was called (look for "label" as a command, not substring)
         calls = mock_run.call_args_list
@@ -1142,15 +1144,15 @@ class TestStartBinaryBuild:
 
 
 class TestDeleteSessionBuilds:
-    """Tests for _delete_session_builds method."""
+    """Tests for _builder.delete_session_builds method."""
 
     @patch("subprocess.run")
     def test_deletes_builds_with_session_label(self, mock_run: MagicMock) -> None:
-        """_delete_session_builds deletes builds with session label."""
+        """_builder.delete_session_builds deletes builds with session label."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._delete_session_builds("my-session")
+        backend._builder.delete_session_builds("my-session")
 
         # Verify delete build command was called with correct label
         calls = mock_run.call_args_list
@@ -1165,13 +1167,13 @@ class TestDeleteSessionBuilds:
 
 
 class TestDeleteSessionCallsDeleteBuilds:
-    """Tests for delete_session calling _delete_session_builds."""
+    """Tests for delete_session calling _builder.delete_session_builds."""
 
     @patch("subprocess.run")
     def test_delete_session_calls_delete_session_builds(
         self, mock_run: MagicMock
     ) -> None:
-        """delete_session calls _delete_session_builds."""
+        """delete_session calls _builder.delete_session_builds."""
 
         def run_side_effect(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("args", [])
@@ -1310,11 +1312,11 @@ class TestEnsureImageViaBuildPassesSessionName:
 
 
 class TestGetImagestreamReference:
-    """Tests for _get_imagestream_reference method."""
+    """Tests for _builder.get_imagestream_reference method."""
 
     @patch("subprocess.run")
     def test_returns_internal_reference(self, mock_run: MagicMock) -> None:
-        """_get_imagestream_reference returns internal image URL."""
+        """_builder.get_imagestream_reference returns internal image URL."""
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout="image-registry.openshift-image-registry.svc:5000/test-ns/paude-abc123",
@@ -1322,7 +1324,7 @@ class TestGetImagestreamReference:
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        ref = backend._get_imagestream_reference("abc123")
+        ref = backend._builder.get_imagestream_reference("abc123")
 
         assert "image-registry.openshift-image-registry.svc:5000" in ref
         assert "paude-abc123" in ref
@@ -1330,7 +1332,7 @@ class TestGetImagestreamReference:
 
     @patch("subprocess.run")
     def test_falls_back_to_default_registry(self, mock_run: MagicMock) -> None:
-        """_get_imagestream_reference uses default when no dockerImageRepository."""
+        """_builder.get_imagestream_reference uses default when no dockerImageRepository."""
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout="",
@@ -1338,7 +1340,7 @@ class TestGetImagestreamReference:
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        ref = backend._get_imagestream_reference("abc123")
+        ref = backend._builder.get_imagestream_reference("abc123")
 
         assert "image-registry.openshift-image-registry.svc:5000" in ref
         assert "test-ns" in ref
@@ -1351,15 +1353,15 @@ class TestGetImagestreamReference:
 
 
 class TestCreateProxyDeployment:
-    """Tests for _create_proxy_deployment method."""
+    """Tests for _proxy.create_deployment method."""
 
     @patch("subprocess.run")
     def test_creates_deployment_with_correct_spec(self, mock_run: MagicMock) -> None:
-        """_create_proxy_deployment creates Deployment with correct spec."""
+        """_proxy.create_deployment creates Deployment with correct spec."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._create_proxy_deployment("my-session", "quay.io/test/proxy:latest")
+        backend._proxy.create_deployment("my-session", "quay.io/test/proxy:latest")
 
         # Find the apply call
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
@@ -1390,7 +1392,7 @@ class TestProxyImagePullPolicy:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._create_proxy_deployment("my-session", "quay.io/test/proxy:latest")
+        backend._proxy.create_deployment("my-session", "quay.io/test/proxy:latest")
 
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
         assert len(apply_calls) >= 1
@@ -1412,7 +1414,7 @@ class TestProxyImagePullPolicy:
             os.environ["PAUDE_IMAGE_PULL_POLICY"] = "IfNotPresent"
 
             backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-            backend._create_proxy_deployment("my-session", "quay.io/test/proxy:latest")
+            backend._proxy.create_deployment("my-session", "quay.io/test/proxy:latest")
 
             apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
             assert len(apply_calls) >= 1
@@ -1429,15 +1431,15 @@ class TestProxyImagePullPolicy:
 
 
 class TestCreateProxyService:
-    """Tests for _create_proxy_service method."""
+    """Tests for _proxy.create_service method."""
 
     @patch("subprocess.run")
     def test_creates_service_with_correct_spec(self, mock_run: MagicMock) -> None:
-        """_create_proxy_service creates Service with correct spec."""
+        """_proxy.create_service creates Service with correct spec."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        service_name = backend._create_proxy_service("my-session")
+        service_name = backend._proxy.create_service("my-session")
 
         assert service_name == "paude-proxy-my-session"
 
@@ -1457,17 +1459,17 @@ class TestCreateProxyService:
 
 
 class TestEnsureNetworkPolicyPermissive:
-    """Tests for _ensure_network_policy_permissive method."""
+    """Tests for _proxy.ensure_network_policy_permissive method."""
 
     @patch("subprocess.run")
     def test_creates_permissive_egress_policy_for_paude_pod(
         self, mock_run: MagicMock
     ) -> None:
-        """_ensure_network_policy_permissive creates policy allowing all egress."""
+        """_proxy.ensure_network_policy_permissive creates policy allowing all egress."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._ensure_network_policy_permissive("my-session")
+        backend._proxy.ensure_network_policy_permissive("my-session")
 
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
         assert len(apply_calls) >= 1
@@ -1495,11 +1497,11 @@ class TestNetworkPolicyWithProxySelector:
 
     @patch("subprocess.run")
     def test_network_policy_uses_pod_selector(self, mock_run: MagicMock) -> None:
-        """_ensure_network_policy uses pod selector for proxy access."""
+        """_proxy.ensure_network_policy uses pod selector for proxy access."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._ensure_network_policy("my-session")
+        backend._proxy.ensure_network_policy("my-session")
 
         # Find the apply call
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
@@ -1531,11 +1533,11 @@ class TestNetworkPolicyWithProxySelector:
 
     @patch("subprocess.run")
     def test_network_policy_no_cidr_blocks(self, mock_run: MagicMock) -> None:
-        """_ensure_network_policy does not use CIDR blocks anymore."""
+        """_proxy.ensure_network_policy does not use CIDR blocks anymore."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._ensure_network_policy("my-session")
+        backend._proxy.ensure_network_policy("my-session")
 
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
         call_kwargs = apply_calls[0][1]
@@ -1560,7 +1562,7 @@ class TestNetworkPolicyWithProxySelector:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._ensure_network_policy("my-session")
+        backend._proxy.ensure_network_policy("my-session")
 
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
         call_kwargs = apply_calls[0][1]
@@ -1800,15 +1802,15 @@ class TestDeleteSessionWithProxy:
 
 
 class TestDeleteProxyResources:
-    """Tests for _delete_proxy_resources method."""
+    """Tests for _proxy.delete_resources method."""
 
     @patch("subprocess.run")
     def test_deletes_deployment_and_service(self, mock_run: MagicMock) -> None:
-        """_delete_proxy_resources deletes both Deployment and Service."""
+        """_proxy.delete_resources deletes both Deployment and Service."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._delete_proxy_resources("my-session")
+        backend._proxy.delete_resources("my-session")
 
         calls = mock_run.call_args_list
         delete_calls = [c for c in calls if "delete" in str(c)]
@@ -1831,15 +1833,15 @@ class TestDeleteProxyResources:
 
 
 class TestEnsureProxyNetworkPolicy:
-    """Tests for _ensure_proxy_network_policy method."""
+    """Tests for _proxy.ensure_proxy_network_policy method."""
 
     @patch("subprocess.run")
     def test_creates_permissive_egress_policy(self, mock_run: MagicMock) -> None:
-        """_ensure_proxy_network_policy creates policy allowing all egress."""
+        """_proxy.ensure_proxy_network_policy creates policy allowing all egress."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._ensure_proxy_network_policy("my-session")
+        backend._proxy.ensure_proxy_network_policy("my-session")
 
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
         assert len(apply_calls) >= 1
@@ -1996,7 +1998,7 @@ class TestStartSessionWaitsForProxy:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        with patch.object(backend, "_wait_for_pod_ready"):
+        with patch.object(backend._pod_waiter, "wait_for_ready"):
             with patch.object(backend, "connect_session", return_value=0):
                 backend.start_session("test")
 
@@ -2040,7 +2042,7 @@ class TestStartSessionWaitsForProxy:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        with patch.object(backend, "_wait_for_pod_ready"):
+        with patch.object(backend._pod_waiter, "wait_for_ready"):
             with patch.object(backend, "connect_session", return_value=0):
                 backend.start_session("test")
 
@@ -2056,7 +2058,7 @@ class TestConnectSessionRefreshesCredentials:
     def test_connect_session_full_sync_on_first_connect(
         self, mock_run: MagicMock
     ) -> None:
-        """connect_session calls _sync_config_to_pod on first connect.
+        """connect_session calls _syncer.sync_full_config on first connect.
 
         When .ready doesn't exist (first connect after start), full config
         sync is performed including gcloud, claude config, and gitconfig.
@@ -2073,10 +2075,10 @@ class TestConnectSessionRefreshesCredentials:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        # Mock _is_config_synced to return False (first connect)
-        with patch.object(backend, "_is_config_synced", return_value=False):
-            with patch.object(backend, "_sync_config_to_pod") as mock_full_sync:
-                with patch.object(backend, "_sync_credentials_to_pod") as mock_creds:
+        # Mock _syncer.is_config_synced to return False (first connect)
+        with patch.object(backend._syncer, "is_config_synced", return_value=False):
+            with patch.object(backend._syncer, "sync_full_config") as mock_full_sync:
+                with patch.object(backend._syncer, "sync_credentials") as mock_creds:
                     with patch("subprocess.run", mock_run):
                         backend.connect_session("test")
 
@@ -2089,7 +2091,7 @@ class TestConnectSessionRefreshesCredentials:
     def test_connect_session_credentials_only_on_reconnect(
         self, mock_run: MagicMock
     ) -> None:
-        """connect_session calls _sync_credentials_to_pod on reconnect.
+        """connect_session calls _syncer.sync_credentials on reconnect.
 
         When .ready exists (reconnect), only gcloud credentials are refreshed
         for faster reconnection.
@@ -2106,10 +2108,10 @@ class TestConnectSessionRefreshesCredentials:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        # Mock _is_config_synced to return True (reconnect)
-        with patch.object(backend, "_is_config_synced", return_value=True):
-            with patch.object(backend, "_sync_config_to_pod") as mock_full_sync:
-                with patch.object(backend, "_sync_credentials_to_pod") as mock_creds:
+        # Mock _syncer.is_config_synced to return True (reconnect)
+        with patch.object(backend._syncer, "is_config_synced", return_value=True):
+            with patch.object(backend._syncer, "sync_full_config") as mock_full_sync:
+                with patch.object(backend._syncer, "sync_credentials") as mock_creds:
                     with patch("subprocess.run", mock_run):
                         backend.connect_session("test")
 
@@ -2127,8 +2129,8 @@ class TestConnectSessionRefreshesCredentials:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        with patch.object(backend, "_sync_config_to_pod") as mock_full_sync:
-            with patch.object(backend, "_sync_credentials_to_pod") as mock_creds:
+        with patch.object(backend._syncer, "sync_full_config") as mock_full_sync:
+            with patch.object(backend._syncer, "sync_credentials") as mock_creds:
                 result = backend.connect_session("test")
 
                 # Should return 1 (error) without syncing
@@ -2148,8 +2150,8 @@ class TestConnectSessionRefreshesCredentials:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        with patch.object(backend, "_sync_config_to_pod") as mock_full_sync:
-            with patch.object(backend, "_sync_credentials_to_pod") as mock_creds:
+        with patch.object(backend._syncer, "sync_full_config") as mock_full_sync:
+            with patch.object(backend._syncer, "sync_credentials") as mock_creds:
                 result = backend.connect_session("test")
 
                 # Should return 1 (error) without syncing
@@ -2180,8 +2182,8 @@ class TestConnectSessionRefreshesCredentials:
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
-        with patch.object(backend, "_is_config_synced", return_value=True):
-            with patch.object(backend, "_sync_credentials_to_pod"):
+        with patch.object(backend._syncer, "is_config_synced", return_value=True):
+            with patch.object(backend._syncer, "sync_credentials"):
                 backend.connect_session("test")
 
         captured = capsys.readouterr()
@@ -2191,15 +2193,15 @@ class TestConnectSessionRefreshesCredentials:
 
 
 class TestIsConfigSynced:
-    """Tests for _is_config_synced method."""
+    """Tests for _syncer.is_config_synced method."""
 
     @patch("subprocess.run")
     def test_returns_true_when_ready_exists(self, mock_run: MagicMock) -> None:
-        """_is_config_synced returns True when .ready file exists."""
+        """_syncer.is_config_synced returns True when .ready file exists."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        result = backend._is_config_synced("paude-test-0")
+        result = backend._syncer.is_config_synced("paude-test-0")
 
         assert result is True
         # Verify it runs test -f /credentials/.ready
@@ -2210,21 +2212,21 @@ class TestIsConfigSynced:
 
     @patch("subprocess.run")
     def test_returns_false_when_ready_missing(self, mock_run: MagicMock) -> None:
-        """_is_config_synced returns False when .ready file doesn't exist."""
+        """_syncer.is_config_synced returns False when .ready file doesn't exist."""
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        result = backend._is_config_synced("paude-test-0")
+        result = backend._syncer.is_config_synced("paude-test-0")
 
         assert result is False
 
 
 class TestSyncCredentialsToPod:
-    """Tests for _sync_credentials_to_pod method (fast credential refresh)."""
+    """Tests for _syncer.sync_credentials method (fast credential refresh)."""
 
     @patch("subprocess.run")
     def test_syncs_gcloud_files(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """_sync_credentials_to_pod syncs gcloud credential files."""
+        """_syncer.sync_credentials syncs gcloud credential files."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create fake gcloud credentials
@@ -2237,7 +2239,7 @@ class TestSyncCredentialsToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_credentials_to_pod("paude-test-0", verbose=True)
+            backend._syncer.sync_credentials("paude-test-0", verbose=True)
 
         # Verify oc cp was called for gcloud files
         cp_calls = [c for c in mock_run.call_args_list if "cp" in str(c)]
@@ -2246,13 +2248,13 @@ class TestSyncCredentialsToPod:
 
     @patch("subprocess.run")
     def test_touches_ready_marker(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """_sync_credentials_to_pod touches .ready marker."""
+        """_syncer.sync_credentials touches .ready marker."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_credentials_to_pod("paude-test-0")
+            backend._syncer.sync_credentials("paude-test-0")
 
         # Verify touch .ready was called
         touch_calls = [
@@ -2266,7 +2268,7 @@ class TestSyncCredentialsToPod:
     def test_does_not_sync_claude_or_git_config(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_credentials_to_pod only syncs gcloud, not claude/git config."""
+        """_syncer.sync_credentials only syncs gcloud, not claude/git config."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create fake configs
@@ -2283,7 +2285,7 @@ class TestSyncCredentialsToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_credentials_to_pod("paude-test-0")
+            backend._syncer.sync_credentials("paude-test-0")
 
         # Verify no claude or git syncing
         all_calls_str = str(mock_run.call_args_list)
@@ -2358,7 +2360,7 @@ class TestSyncCursorAuthJson:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_credentials_to_pod("test-pod-0", agent_name="cursor")
+            backend._syncer.sync_credentials("test-pod-0", agent_name="cursor")
 
         cp_calls = [c for c in mock_run.call_args_list if "cp" in str(c)]
         auth_cp_calls = [c for c in cp_calls if "cursor-auth.json" in str(c)]
@@ -2378,7 +2380,7 @@ class TestSyncCursorAuthJson:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_credentials_to_pod("test-pod-0", agent_name="claude")
+            backend._syncer.sync_credentials("test-pod-0", agent_name="claude")
 
         all_calls_str = str(mock_run.call_args_list)
         assert "cursor-auth.json" not in all_calls_str
@@ -2426,19 +2428,19 @@ class TestCreateSessionWithProxyNetworkPolicy:
 
 
 class TestSyncConfigToPod:
-    """Tests for _sync_config_to_pod method (tmpfs-based credential sync)."""
+    """Tests for _syncer.sync_full_config method (tmpfs-based credential sync)."""
 
     @patch("subprocess.run")
     def test_creates_config_directory_structure(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod creates /credentials directory structure."""
+        """_syncer.sync_full_config creates /credentials directory structure."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find the exec call that creates the directory structure
         exec_calls = [
@@ -2459,7 +2461,7 @@ class TestSyncConfigToPod:
     def test_syncs_gcloud_credentials(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod syncs gcloud credential files."""
+        """_syncer.sync_full_config syncs gcloud credential files."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create mock gcloud files
@@ -2471,7 +2473,7 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find oc cp calls for gcloud files
         cp_calls = [c for c in mock_run.call_args_list if "cp" in str(c)]
@@ -2485,7 +2487,7 @@ class TestSyncConfigToPod:
     def test_syncs_claude_config_files(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod syncs claude config directory via rsync."""
+        """_syncer.sync_full_config syncs claude config directory via rsync."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create mock claude files
@@ -2498,7 +2500,7 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find rsync calls (now using rsync for ~/.claude/)
         rsync_calls = [c for c in mock_run.call_args_list if "rsync" in str(c)]
@@ -2515,7 +2517,7 @@ class TestSyncConfigToPod:
 
     @patch("subprocess.run")
     def test_syncs_gitconfig(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """_sync_config_to_pod syncs gitconfig."""
+        """_syncer.sync_full_config syncs gitconfig."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create mock gitconfig
@@ -2524,7 +2526,7 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find oc cp call for gitconfig
         cp_calls = [c for c in mock_run.call_args_list if "cp" in str(c)]
@@ -2535,7 +2537,7 @@ class TestSyncConfigToPod:
 
     @patch("subprocess.run")
     def test_syncs_global_gitignore(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """_sync_config_to_pod syncs global gitignore from ~/.config/git/ignore."""
+        """_syncer.sync_full_config syncs global gitignore from ~/.config/git/ignore."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create mock global gitignore
@@ -2546,7 +2548,7 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find oc cp call for global gitignore
         cp_calls = [c for c in mock_run.call_args_list if "cp" in str(c)]
@@ -2559,7 +2561,7 @@ class TestSyncConfigToPod:
     def test_skips_global_gitignore_when_missing(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod skips global gitignore when it doesn't exist."""
+        """_syncer.sync_full_config skips global gitignore when it doesn't exist."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Don't create the global gitignore file
@@ -2567,7 +2569,7 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Should not have a cp call for gitignore-global
         cp_calls_str = str(mock_run.call_args_list)
@@ -2577,7 +2579,7 @@ class TestSyncConfigToPod:
     def test_verbose_output_for_global_gitignore(
         self, mock_run: MagicMock, tmp_path: Path, capsys: Any
     ) -> None:
-        """_sync_config_to_pod prints verbose output for global gitignore."""
+        """_syncer.sync_full_config prints verbose output for global gitignore."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create mock global gitignore
@@ -2588,20 +2590,20 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0", verbose=True)
+            backend._syncer.sync_full_config("test-pod-0", verbose=True)
 
         captured = capsys.readouterr()
         assert "global gitignore" in captured.err
 
     @patch("subprocess.run")
     def test_creates_ready_marker(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """_sync_config_to_pod creates .ready marker file."""
+        """_syncer.sync_full_config creates .ready marker file."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find the exec call that creates the .ready marker
         exec_calls = [
@@ -2628,7 +2630,7 @@ class TestSyncConfigToPod:
     def test_warns_when_ready_marker_fails(
         self, mock_run: MagicMock, tmp_path: Path, capsys: Any
     ) -> None:
-        """_sync_config_to_pod warns if .ready marker creation fails."""
+        """_syncer.sync_full_config warns if .ready marker creation fails."""
 
         def run_side_effect(*args, **kwargs):
             cmd = args[0] if args else kwargs.get("args", [])
@@ -2644,7 +2646,7 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         captured = capsys.readouterr()
         assert "Warning: Failed to create" in captured.err
@@ -2654,7 +2656,7 @@ class TestSyncConfigToPod:
     def test_handles_missing_files_gracefully(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod doesn't fail when files are missing."""
+        """_syncer.sync_full_config doesn't fail when files are missing."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # No credential files exist in tmp_path
@@ -2663,7 +2665,7 @@ class TestSyncConfigToPod:
 
         # Should not raise
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Should still create the directory structure and .ready marker
         calls_str = str(mock_run.call_args_list)
@@ -2672,7 +2674,7 @@ class TestSyncConfigToPod:
 
     @patch("subprocess.run")
     def test_raises_on_mkdir_failure(self, mock_run: MagicMock, tmp_path: Path) -> None:
-        """_sync_config_to_pod raises OpenShiftError when mkdir fails."""
+        """_syncer.sync_full_config raises OpenShiftError when mkdir fails."""
         from paude.backends.openshift import OpenShiftError
 
         def mock_run_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
@@ -2692,7 +2694,7 @@ class TestSyncConfigToPod:
 
         with patch.object(Path, "home", return_value=tmp_path):
             with pytest.raises(OpenShiftError) as exc_info:
-                backend._sync_config_to_pod("test-pod-0")
+                backend._syncer.sync_full_config("test-pod-0")
 
         assert "Failed to prepare config directory" in str(exc_info.value)
 
@@ -2700,13 +2702,13 @@ class TestSyncConfigToPod:
     def test_exec_calls_use_extended_timeout(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod exec calls use OC_EXEC_TIMEOUT (not default)."""
+        """_syncer.sync_full_config exec calls use OC_EXEC_TIMEOUT (not default)."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find all exec calls (mkdir/chmod operations)
         exec_calls = [
@@ -2736,7 +2738,7 @@ class TestSyncConfigWithPlugins:
     def test_sync_config_uses_rsync_with_excludes(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod uses rsync with config excludes for ~/.claude/."""
+        """_syncer.sync_full_config uses rsync with config excludes for ~/.claude/."""
         # Create mock claude directory
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
@@ -2750,7 +2752,7 @@ class TestSyncConfigWithPlugins:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Find rsync calls
         rsync_calls = [
@@ -2770,7 +2772,7 @@ class TestSyncConfigWithPlugins:
     def test_sync_config_calls_rewrite_plugin_paths(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod calls _rewrite_plugin_paths after rsync."""
+        """_syncer.sync_full_config calls _rewrite_plugin_paths after rsync."""
         # Create mock claude directory
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
@@ -2786,7 +2788,7 @@ class TestSyncConfigWithPlugins:
         with patch("pathlib.Path.home", return_value=tmp_path):
             # Patch the syncer's method since sync is now delegated to ConfigSyncer
             with patch.object(backend._syncer, "_rewrite_plugin_paths") as mock_rewrite:
-                backend._sync_config_to_pod("test-pod-0")
+                backend._syncer.sync_full_config("test-pod-0")
                 mock_rewrite.assert_called_once_with(
                     "test-pod-0",
                     "/credentials",
@@ -2798,7 +2800,7 @@ class TestSyncConfigWithPlugins:
     def test_sync_config_handles_missing_claude_dir(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod handles missing ~/.claude/ gracefully."""
+        """_syncer.sync_full_config handles missing ~/.claude/ gracefully."""
         # Don't create claude directory
 
         def mock_run_side_effect(*args: Any, **kwargs: Any) -> MagicMock:
@@ -2810,7 +2812,7 @@ class TestSyncConfigWithPlugins:
 
         with patch("pathlib.Path.home", return_value=tmp_path):
             # Should not raise
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         # Should not have rsync calls for claude directory
         rsync_calls = [
@@ -2824,7 +2826,7 @@ class TestSyncConfigWithPlugins:
     def test_sync_config_skips_rewrite_on_rsync_failure(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_config_to_pod does NOT call _rewrite_plugin_paths when rsync fails."""
+        """_syncer.sync_full_config does NOT call _rewrite_plugin_paths when rsync fails."""
         # Create mock claude directory
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
@@ -2846,8 +2848,8 @@ class TestSyncConfigWithPlugins:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            with patch.object(backend, "_rewrite_plugin_paths") as mock_rewrite:
-                backend._sync_config_to_pod("test-pod-0")
+            with patch.object(backend._syncer, "_rewrite_plugin_paths") as mock_rewrite:
+                backend._syncer.sync_full_config("test-pod-0")
                 # Should NOT be called because rsync failed
                 mock_rewrite.assert_not_called()
 
@@ -2855,7 +2857,7 @@ class TestSyncConfigWithPlugins:
     def test_sync_config_prints_warning_on_rsync_failure(
         self, mock_run: MagicMock, tmp_path: Path, capsys: Any
     ) -> None:
-        """_sync_config_to_pod prints warning when rsync fails."""
+        """_syncer.sync_full_config prints warning when rsync fails."""
         # Create mock claude directory
         claude_dir = tmp_path / ".claude"
         claude_dir.mkdir()
@@ -2876,7 +2878,7 @@ class TestSyncConfigWithPlugins:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._sync_config_to_pod("test-pod-0")
+            backend._syncer.sync_full_config("test-pod-0")
 
         captured = capsys.readouterr()
         assert "Warning: Failed to sync ~/.claude/" in captured.err
@@ -2896,7 +2898,7 @@ class TestRewritePluginPaths:
         mock_run.side_effect = mock_run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
 
         # Find exec calls with jq
         jq_calls = [
@@ -2920,7 +2922,7 @@ class TestRewritePluginPaths:
         mock_run.side_effect = mock_run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
 
         # Check for installed_plugins.json rewrite
         installed_plugins_calls = [
@@ -2946,7 +2948,7 @@ class TestRewritePluginPaths:
         mock_run.side_effect = mock_run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
 
         # Check that the container path is used
         all_calls_str = str(mock_run.call_args_list)
@@ -2964,7 +2966,7 @@ class TestRewritePluginPaths:
         mock_run.side_effect = mock_run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
 
         # The jq expression should include null-safety check
         all_calls_str = str(mock_run.call_args_list)
@@ -2983,7 +2985,7 @@ class TestRewritePluginPaths:
         mock_run.side_effect = mock_run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
 
         # The jq expression for known_marketplaces should include null-safety
         all_calls_str = str(mock_run.call_args_list)
@@ -3311,7 +3313,7 @@ class TestBuildConfigNamePrefix:
         mock_run.side_effect = run_side_effect
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._create_build_config("abc123", name_prefix="paude-proxy")
+        backend._builder.create_build_config("abc123", name_prefix="paude-proxy")
 
         # Verify apply calls use the correct name
         apply_calls = [c for c in mock_run.call_args_list if "apply" in str(c)]
@@ -3326,13 +3328,13 @@ class TestBuildConfigNamePrefix:
     def test_start_binary_build_uses_name_prefix(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_start_binary_build uses name_prefix in build config name."""
+        """_builder.start_binary_build uses name_prefix in build config name."""
         mock_run.return_value = MagicMock(
             returncode=0, stdout="build/paude-proxy-abc123-1 started", stderr=""
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        build_name = backend._start_binary_build(
+        build_name = backend._builder.start_binary_build(
             "abc123", tmp_path, name_prefix="paude-proxy"
         )
 
@@ -3349,7 +3351,7 @@ class TestBuildConfigNamePrefix:
     def test_get_imagestream_reference_uses_name_prefix(
         self, mock_run: MagicMock
     ) -> None:
-        """_get_imagestream_reference uses name_prefix in imagestream name."""
+        """_builder.get_imagestream_reference uses name_prefix in imagestream name."""
         mock_run.return_value = MagicMock(
             returncode=0,
             stdout="image-registry.svc:5000/test-ns/paude-proxy-abc123",
@@ -3357,7 +3359,9 @@ class TestBuildConfigNamePrefix:
         )
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        ref = backend._get_imagestream_reference("abc123", name_prefix="paude-proxy")
+        ref = backend._builder.get_imagestream_reference(
+            "abc123", name_prefix="paude-proxy"
+        )
 
         assert "paude-proxy-abc123" in ref
 

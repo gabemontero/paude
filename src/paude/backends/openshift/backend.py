@@ -6,7 +6,6 @@ import json
 import os
 import subprocess
 import sys
-import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -28,6 +27,7 @@ from paude.backends.openshift.oc import (
     RSYNC_TIMEOUT,
     OcClient,
 )
+from paude.backends.openshift.pods import PodWaiter
 from paude.backends.openshift.proxy import ProxyManager
 from paude.backends.openshift.resources import (
     StatefulSetBuilder,
@@ -64,6 +64,7 @@ class OpenShiftBackend:
         self._syncer_instance: ConfigSyncer | None = None
         self._builder_instance: BuildOrchestrator | None = None
         self._proxy_instance: ProxyManager | None = None
+        self._pod_waiter_instance: PodWaiter | None = None
         self._resolved_namespace: str | None = None
 
     @property
@@ -90,6 +91,13 @@ class OpenShiftBackend:
         return self._proxy_instance
 
     @property
+    def _pod_waiter(self) -> PodWaiter:
+        """Lazy-initialized PodWaiter instance."""
+        if self._pod_waiter_instance is None:
+            self._pod_waiter_instance = PodWaiter(self._oc, self.namespace)
+        return self._pod_waiter_instance
+
+    @property
     def namespace(self) -> str:
         """Get the resolved namespace.
 
@@ -109,73 +117,6 @@ class OpenShiftBackend:
             self._resolved_namespace = self._oc.get_current_namespace()
 
         return self._resolved_namespace
-
-    def _run_oc(
-        self,
-        *args: str,
-        capture: bool = True,
-        check: bool = True,
-        input_data: str | None = None,
-        timeout: int | None = None,
-        namespace: str | None = None,
-    ) -> subprocess.CompletedProcess[str]:
-        """Run an oc command (delegates to OcClient).
-
-        This method is kept for backward compatibility. New code should
-        use self._oc.run() directly.
-        """
-        return self._oc.run(
-            *args,
-            capture=capture,
-            check=check,
-            input_data=input_data,
-            timeout=timeout,
-            namespace=namespace,
-        )
-
-    def _check_connection(self) -> bool:
-        """Check if logged in to OpenShift (delegates to OcClient)."""
-        return self._oc.check_connection()
-
-    def _get_current_namespace(self) -> str:
-        """Get the current namespace from oc config (delegates to OcClient)."""
-        return self._oc.get_current_namespace()
-
-    def _verify_namespace(self) -> None:
-        """Verify the target namespace exists (delegates to OcClient)."""
-        self._oc.verify_namespace(self.namespace)
-
-    def _create_build_config(
-        self,
-        config_hash: str,
-        name_prefix: str = "paude",
-    ) -> None:
-        """Create a BuildConfig (delegates to BuildOrchestrator)."""
-        self._builder.create_build_config(config_hash, name_prefix)
-
-    def _start_binary_build(
-        self,
-        config_hash: str,
-        context_dir: Path,
-        session_name: str | None = None,
-        name_prefix: str = "paude",
-    ) -> str:
-        """Start a binary build (delegates to BuildOrchestrator)."""
-        return self._builder.start_binary_build(
-            config_hash, context_dir, session_name, name_prefix
-        )
-
-    def _wait_for_build(self, build_name: str, timeout: int = 600) -> None:
-        """Wait for a build to complete (delegates to BuildOrchestrator)."""
-        self._builder.wait_for_build(build_name, timeout)
-
-    def _get_imagestream_reference(
-        self,
-        config_hash: str,
-        name_prefix: str = "paude",
-    ) -> str:
-        """Get imagestream reference (delegates to BuildOrchestrator)."""
-        return self._builder.get_imagestream_reference(config_hash, name_prefix)
 
     def ensure_image_via_build(
         self,
@@ -207,274 +148,9 @@ class OpenShiftBackend:
             script_dir, force_rebuild, session_name
         )
 
-    def _ensure_network_policy(self, session_id: str) -> None:
-        """Ensure a NetworkPolicy exists (delegates to ProxyManager)."""
-        self._proxy.ensure_network_policy(session_id)
-
-    def _ensure_network_policy_permissive(self, session_id: str) -> None:
-        """Ensure a permissive NetworkPolicy exists (delegates to ProxyManager)."""
-        self._proxy.ensure_network_policy_permissive(session_id)
-
-    def _create_proxy_deployment(
-        self,
-        session_name: str,
-        proxy_image: str,
-        allowed_domains: list[str] | None = None,
-    ) -> None:
-        """Create a proxy Deployment (delegates to ProxyManager)."""
-        self._proxy.create_deployment(session_name, proxy_image, allowed_domains)
-
-    def _create_proxy_service(self, session_name: str) -> str:
-        """Create a proxy Service (delegates to ProxyManager)."""
-        return self._proxy.create_service(session_name)
-
-    def _wait_for_proxy_ready(
-        self,
-        session_name: str,
-        timeout: int = 120,
-    ) -> None:
-        """Wait for the proxy deployment to be ready (delegates to ProxyManager)."""
-        self._proxy.wait_for_ready(session_name, timeout)
-
-    def _delete_proxy_resources(self, session_name: str) -> None:
-        """Delete proxy resources (delegates to ProxyManager)."""
-        self._proxy.delete_resources(session_name)
-
-    def _delete_session_builds(self, session_name: str) -> None:
-        """Delete Build objects (delegates to BuildOrchestrator)."""
-        print(
-            f"Deleting Build objects for session '{session_name}'...",
-            file=sys.stderr,
-        )
-        self._builder.delete_session_builds(session_name)
-
-    def _ensure_proxy_network_policy(self, session_name: str) -> None:
-        """Create a NetworkPolicy for the proxy pod (delegates to ProxyManager)."""
-        self._proxy.ensure_proxy_network_policy(session_name)
-
-    # Terminal failure states that indicate immediate failure (no point waiting)
-    TERMINAL_WAITING_REASONS = frozenset(
-        {
-            "ImagePullBackOff",
-            "ErrImagePull",
-            "CrashLoopBackOff",
-            "CreateContainerConfigError",
-            "InvalidImageName",
-            "CreateContainerError",
-        }
-    )
-
-    def _get_container_status(self, pod_name: str) -> tuple[str | None, str | None]:
-        """Get container waiting reason and message from pod status.
-
-        Args:
-            pod_name: Name of the pod.
-
-        Returns:
-            Tuple of (waiting_reason, waiting_message) or (None, None).
-        """
-        ns = self.namespace
-        result = self._run_oc(
-            "get",
-            "pod",
-            pod_name,
-            "-n",
-            ns,
-            "-o",
-            "jsonpath={.status.containerStatuses[0].state.waiting.reason},"
-            "{.status.containerStatuses[0].state.waiting.message}",
-            check=False,
-        )
-
-        if result.returncode != 0:
-            return None, None
-
-        parts = result.stdout.strip().split(",", 1)
-        reason = parts[0] if parts[0] else None
-        message = parts[1] if len(parts) > 1 and parts[1] else None
-        return reason, message
-
-    def _collect_pod_debug_info(self, pod_name: str) -> str:
-        """Collect debug information for a failed pod.
-
-        Args:
-            pod_name: Name of the pod.
-
-        Returns:
-            Formatted debug information string.
-        """
-        ns = self.namespace
-        lines = []
-
-        # Get pod events
-        events_result = self._run_oc(
-            "get",
-            "events",
-            "-n",
-            ns,
-            "--field-selector",
-            f"involvedObject.name={pod_name}",
-            "--sort-by=.lastTimestamp",
-            "-o",
-            "custom-columns=TIME:.lastTimestamp,TYPE:.type,"
-            "REASON:.reason,MESSAGE:.message",
-            check=False,
-        )
-        if events_result.returncode == 0 and events_result.stdout.strip():
-            lines.append("=== Pod Events ===")
-            lines.append(events_result.stdout.strip())
-
-        # Get pod describe (truncated)
-        describe_result = self._run_oc(
-            "describe",
-            "pod",
-            pod_name,
-            "-n",
-            ns,
-            check=False,
-        )
-        if describe_result.returncode == 0 and describe_result.stdout.strip():
-            lines.append("\n=== Pod Describe (truncated) ===")
-            describe_lines = describe_result.stdout.strip().split("\n")
-            lines.append("\n".join(describe_lines[:50]))
-            if len(describe_lines) > 50:
-                lines.append(f"... ({len(describe_lines) - 50} more lines)")
-
-        # Try to get container logs (may not exist if container never started)
-        logs_result = self._run_oc(
-            "logs",
-            pod_name,
-            "-n",
-            ns,
-            "--tail=30",
-            check=False,
-        )
-        if logs_result.returncode == 0 and logs_result.stdout.strip():
-            lines.append("\n=== Container Logs (last 30 lines) ===")
-            lines.append(logs_result.stdout.strip())
-
-        return "\n".join(lines) if lines else "No debug information available"
-
-    def _wait_for_pod_ready(
-        self,
-        pod_name: str,
-        timeout: int = 300,
-    ) -> None:
-        """Wait for a pod to be in Running state.
-
-        Args:
-            pod_name: Name of the pod.
-            timeout: Timeout in seconds. Can be overridden via
-                PAUDE_POD_READY_TIMEOUT environment variable.
-
-        Raises:
-            PodNotReadyError: If pod is not ready within timeout.
-        """
-        # Allow environment variable to override timeout
-        timeout = int(os.environ.get("PAUDE_POD_READY_TIMEOUT", str(timeout)))
-
-        start_time = time.time()
-        ns = self.namespace
-        last_status_time = start_time
-        progress_interval = 15  # Print status every 15 seconds
-
-        while time.time() - start_time < timeout:
-            elapsed = int(time.time() - start_time)
-            remaining = timeout - elapsed
-
-            result = self._run_oc(
-                "get",
-                "pod",
-                pod_name,
-                "-n",
-                ns,
-                "-o",
-                "jsonpath={.status.phase}",
-                check=False,
-            )
-
-            phase = result.stdout.strip() if result.returncode == 0 else "Unknown"
-
-            if result.returncode == 0:
-                if phase == "Running":
-                    return
-                elif phase in ("Failed", "Error"):
-                    debug_info = self._collect_pod_debug_info(pod_name)
-                    print(f"\n{debug_info}", file=sys.stderr)
-                    raise PodNotReadyError(f"Pod {pod_name} failed: {phase}")
-
-            # Check for terminal waiting states (e.g., ImagePullBackOff)
-            waiting_reason, waiting_message = self._get_container_status(pod_name)
-            if waiting_reason in self.TERMINAL_WAITING_REASONS:
-                debug_info = self._collect_pod_debug_info(pod_name)
-                print(f"\n{debug_info}", file=sys.stderr)
-                if waiting_message:
-                    msg = f"{waiting_reason}: {waiting_message}"
-                else:
-                    msg = waiting_reason
-                raise PodNotReadyError(
-                    f"Pod {pod_name} failed with terminal error: {msg}"
-                )
-
-            # Print progress every 15 seconds
-            current_time = time.time()
-            if current_time - last_status_time >= progress_interval:
-                status_parts = [f"phase={phase}"]
-                if waiting_reason:
-                    status_parts.append(f"waiting={waiting_reason}")
-                status_str = ", ".join(status_parts)
-                print(
-                    f"  Waiting for pod... ({elapsed}s/{remaining}s, {status_str})",
-                    file=sys.stderr,
-                )
-                last_status_time = current_time
-
-            time.sleep(2)
-
-        # Timeout reached - collect debug info
-        debug_info = self._collect_pod_debug_info(pod_name)
-        print(f"\n{debug_info}", file=sys.stderr)
-        raise PodNotReadyError(f"Pod {pod_name} not ready within {timeout} seconds")
-
-    def _generate_statefulset_spec(
-        self,
-        session_name: str,
-        image: str,
-        env: dict[str, str],
-        workspace: Path,
-        pvc_size: str = "10Gi",
-        storage_class: str | None = None,
-        agent: str = "claude",
-    ) -> dict[str, Any]:
-        """Generate a Kubernetes StatefulSet specification for persistent sessions.
-
-        Delegates to StatefulSetBuilder for actual spec generation.
-
-        Args:
-            session_name: Session name.
-            image: Container image to use.
-            env: Environment variables to set.
-            workspace: Local workspace path (for annotation).
-            pvc_size: Size of the PVC (e.g., "10Gi").
-            storage_class: Storage class name (None for default).
-            agent: Agent name (e.g., "claude").
-
-        Returns:
-            StatefulSet spec as a dictionary.
-        """
-        return (
-            StatefulSetBuilder(
-                session_name=session_name,
-                namespace=self.namespace,
-                image=image,
-                resources=self._config.resources,
-                agent=agent,
-            )
-            .with_env(env)
-            .with_workspace(workspace)
-            .with_pvc(size=pvc_size, storage_class=storage_class)
-            .build()
-        )
+    # -------------------------------------------------------------------------
+    # Internal helpers
+    # -------------------------------------------------------------------------
 
     def _get_statefulset(self, session_name: str) -> dict[str, Any] | None:
         """Get StatefulSet for a session.
@@ -486,14 +162,13 @@ class OpenShiftBackend:
             StatefulSet data or None if not found.
         """
         sts_name = f"paude-{session_name}"
-        ns = self.namespace
 
-        result = self._run_oc(
+        result = self._oc.run(
             "get",
             "statefulset",
             sts_name,
             "-n",
-            ns,
+            self.namespace,
             "-o",
             "json",
             check=False,
@@ -508,8 +183,25 @@ class OpenShiftBackend:
         except json.JSONDecodeError:
             return None
 
+    def _require_session(self, name: str) -> dict[str, Any]:
+        """Get StatefulSet for a session, raising if not found.
+
+        Args:
+            name: Session name.
+
+        Returns:
+            StatefulSet data.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+        """
+        sts = self._get_statefulset(name)
+        if sts is None:
+            raise SessionNotFoundError(f"Session '{name}' not found")
+        return sts
+
     def _get_pod_for_session(self, session_name: str) -> str | None:
-        """Get the pod name for a session.
+        """Get the pod name for a session if it exists.
 
         For StatefulSets, the pod name is predictable: {sts-name}-0.
 
@@ -517,17 +209,16 @@ class OpenShiftBackend:
             session_name: Session name.
 
         Returns:
-            Pod name or None if not found/not running.
+            Pod name or None if not found.
         """
         pod_name = f"paude-{session_name}-0"
-        ns = self.namespace
 
-        result = self._run_oc(
+        result = self._oc.run(
             "get",
             "pod",
             pod_name,
             "-n",
-            ns,
+            self.namespace,
             "-o",
             "jsonpath={.status.phase}",
             check=False,
@@ -538,45 +229,153 @@ class OpenShiftBackend:
 
         return pod_name
 
-    def _scale_statefulset(self, session_name: str, replicas: int) -> None:
-        """Scale a StatefulSet to the specified number of replicas.
+    def _require_running_pod(self, name: str) -> str:
+        """Get pod name for a session, raising if not found or not running.
+
+        Args:
+            name: Session name.
+
+        Returns:
+            Pod name.
+
+        Raises:
+            SessionNotFoundError: If session not found.
+            ValueError: If session is not running.
+        """
+        self._require_session(name)
+        pod_name = self._get_pod_for_session(name)
+        if pod_name is None:
+            raise ValueError(
+                f"Session '{name}' is not running. "
+                f"Use 'paude start {name}' to start it."
+            )
+        return pod_name
+
+    def _has_proxy_deployment(self, session_name: str) -> bool:
+        """Check if a proxy deployment exists for a session.
 
         Args:
             session_name: Session name.
-            replicas: Number of replicas (0 or 1).
-        """
-        sts_name = f"paude-{session_name}"
-        ns = self.namespace
 
-        self._run_oc(
+        Returns:
+            True if proxy deployment exists.
+        """
+        result = self._oc.run(
+            "get",
+            "deployment",
+            f"paude-proxy-{session_name}",
+            "-n",
+            self.namespace,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def _scale_statefulset(self, session_name: str, replicas: int) -> None:
+        """Scale a StatefulSet to the specified number of replicas."""
+        self._oc.run(
             "scale",
             "statefulset",
-            sts_name,
+            f"paude-{session_name}",
             "-n",
-            ns,
+            self.namespace,
             f"--replicas={replicas}",
         )
 
     def _scale_deployment(self, deployment_name: str, replicas: int) -> None:
-        """Scale a Deployment to the specified number of replicas.
-
-        Args:
-            deployment_name: Deployment name.
-            replicas: Number of replicas (0 or 1).
-        """
-        ns = self.namespace
-        self._run_oc(
+        """Scale a Deployment to the specified number of replicas."""
+        self._oc.run(
             "scale",
             "deployment",
             deployment_name,
             "-n",
-            ns,
+            self.namespace,
             f"--replicas={replicas}",
             check=False,  # Don't fail if deployment doesn't exist
         )
 
+    def _generate_statefulset_spec(
+        self,
+        session_name: str,
+        image: str,
+        env: dict[str, str],
+        workspace: Path,
+        pvc_size: str = "10Gi",
+        storage_class: str | None = None,
+        agent: str = "claude",
+    ) -> dict[str, Any]:
+        """Generate a Kubernetes StatefulSet specification."""
+        return (
+            StatefulSetBuilder(
+                session_name=session_name,
+                namespace=self.namespace,
+                image=image,
+                resources=self._config.resources,
+                agent=agent,
+            )
+            .with_env(env)
+            .with_workspace(workspace)
+            .with_pvc(size=pvc_size, storage_class=storage_class)
+            .build()
+        )
+
+    def _session_from_statefulset(
+        self, sts: dict[str, Any], name: str | None = None
+    ) -> Session:
+        """Build a Session object from a StatefulSet dict.
+
+        Args:
+            sts: StatefulSet data from Kubernetes.
+            name: Session name override. If None, extracted from labels.
+
+        Returns:
+            Session object.
+        """
+        metadata = sts.get("metadata", {})
+        labels = metadata.get("labels", {})
+        annotations = metadata.get("annotations", {})
+        spec = sts.get("spec", {})
+
+        session_name = name or labels.get("paude.io/session-name", "unknown")
+
+        # Determine status from replicas
+        replicas = spec.get("replicas", 0)
+        ready_replicas = sts.get("status", {}).get("readyReplicas", 0)
+
+        if replicas == 0:
+            status = "stopped"
+        elif ready_replicas > 0:
+            status = "running"
+        else:
+            status = "pending"
+
+        # Decode workspace path
+        workspace_encoded = annotations.get("paude.io/workspace", "")
+        try:
+            workspace = (
+                decode_path(workspace_encoded)
+                if workspace_encoded
+                else Path("/workspace")
+            )
+        except Exception:
+            workspace = Path("/workspace")
+
+        created_at = annotations.get(
+            "paude.io/created-at", metadata.get("creationTimestamp", "")
+        )
+
+        return Session(
+            name=session_name,
+            status=status,
+            workspace=workspace,
+            created_at=created_at,
+            backend_type="openshift",
+            container_id=f"paude-{session_name}-0",
+            volume_name=f"workspace-paude-{session_name}-0",
+            agent=labels.get(PAUDE_LABEL_AGENT, "claude"),
+        )
+
     # -------------------------------------------------------------------------
-    # New Backend Protocol Methods (persistent sessions)
+    # Backend Protocol Methods (persistent sessions)
     # -------------------------------------------------------------------------
 
     def create_session(self, config: SessionConfig) -> Session:
@@ -591,10 +390,10 @@ class OpenShiftBackend:
             Session object representing the created session.
         """
         # Check connection
-        self._check_connection()
+        self._oc.check_connection()
 
         # Verify namespace exists
-        self._verify_namespace()
+        self._oc.verify_namespace(self.namespace)
 
         # Generate or use provided session name
         session_name = config.name or _generate_session_name(config.workspace)
@@ -624,18 +423,18 @@ class OpenShiftBackend:
                 if proxy_image == config.image:
                     proxy_image = "quay.io/bbrowning/paude-proxy-centos9:latest"
 
-            self._create_proxy_deployment(
+            self._proxy.create_deployment(
                 session_name, proxy_image, config.allowed_domains
             )
-            self._create_proxy_service(session_name)
+            self._proxy.create_service(session_name)
 
             # Create NetworkPolicy for proxy (allows all egress for squid)
-            self._ensure_proxy_network_policy(session_name)
+            self._proxy.ensure_proxy_network_policy(session_name)
 
             # Now create NetworkPolicy that allows traffic to the proxy
-            self._ensure_network_policy(session_name)
+            self._proxy.ensure_network_policy(session_name)
         else:
-            self._ensure_network_policy_permissive(session_name)
+            self._proxy.ensure_network_policy_permissive(session_name)
 
         # Build environment variables
         from paude.agents import get_agent
@@ -674,7 +473,7 @@ class OpenShiftBackend:
             f"Creating StatefulSet/paude-{session_name} in namespace {ns}...",
             file=sys.stderr,
         )
-        self._run_oc(
+        self._oc.run(
             "apply",
             "-f",
             "-",
@@ -684,15 +483,15 @@ class OpenShiftBackend:
         if config.wait_for_ready:
             # Wait for proxy to be ready first (if using proxy)
             if config.allowed_domains is not None:
-                self._wait_for_proxy_ready(session_name)
+                self._proxy.wait_for_ready(session_name)
 
             # Wait for pod to be ready
             pod_name = f"paude-{session_name}-0"
             print(f"Waiting for pod {pod_name} to be ready...", file=sys.stderr)
-            self._wait_for_pod_ready(pod_name)
+            self._pod_waiter.wait_for_ready(pod_name)
 
             # Sync configuration and credentials
-            self._sync_config_to_pod(
+            self._syncer.sync_full_config(
                 pod_name, agent_name=config.agent, secret_env=secret_env
             )
 
@@ -724,10 +523,7 @@ class OpenShiftBackend:
         if not confirm:
             raise ValueError("Deletion requires confirmation. Use --confirm flag.")
 
-        # Check if session exists
-        sts = self._get_statefulset(name)
-        if sts is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
+        self._require_session(name)
 
         ns = self.namespace
         sts_name = f"paude-{name}"
@@ -737,7 +533,7 @@ class OpenShiftBackend:
 
         # Scale to 0 first to gracefully stop pod
         print(f"Scaling StatefulSet/{sts_name} to 0...", file=sys.stderr)
-        self._run_oc(
+        self._oc.run(
             "scale",
             "statefulset",
             sts_name,
@@ -749,7 +545,7 @@ class OpenShiftBackend:
 
         # Delete StatefulSet
         print(f"Deleting StatefulSet/{sts_name}...", file=sys.stderr)
-        self._run_oc(
+        self._oc.run(
             "delete",
             "statefulset",
             sts_name,
@@ -762,7 +558,7 @@ class OpenShiftBackend:
         # Delete PVC (volumeClaimTemplates don't delete PVCs automatically)
         # Use longer timeout since PVC deletion waits for pod termination
         print(f"Deleting PVC/{pvc_name}...", file=sys.stderr)
-        self._run_oc(
+        self._oc.run(
             "delete",
             "pvc",
             pvc_name,
@@ -774,7 +570,7 @@ class OpenShiftBackend:
 
         # Delete session-specific NetworkPolicies
         print("Deleting NetworkPolicy for session...", file=sys.stderr)
-        self._run_oc(
+        self._oc.run(
             "delete",
             "networkpolicy",
             "-n",
@@ -785,54 +581,16 @@ class OpenShiftBackend:
         )
 
         # Delete proxy Deployment and Service (if they exist)
-        self._delete_proxy_resources(name)
+        self._proxy.delete_resources(name)
 
         # Delete Build objects created for this session
-        self._delete_session_builds(name)
+        print(
+            f"Deleting Build objects for session '{name}'...",
+            file=sys.stderr,
+        )
+        self._builder.delete_session_builds(name)
 
         print(f"Session '{name}' deleted.", file=sys.stderr)
-
-    def _is_config_synced(self, pod_name: str) -> bool:
-        """Check if configuration has already been synced to the pod."""
-        return self._syncer.is_config_synced(pod_name)
-
-    def _sync_credentials_to_pod(
-        self,
-        pod_name: str,
-        verbose: bool = False,
-        github_token: str | None = None,
-        secret_env: dict[str, str] | None = None,
-        agent_name: str = "claude",
-    ) -> None:
-        """Refresh gcloud credentials on the pod (delegates to ConfigSyncer)."""
-        self._syncer.sync_credentials(
-            pod_name,
-            verbose=verbose,
-            github_token=github_token,
-            secret_env=secret_env,
-            agent_name=agent_name,
-        )
-
-    def _sync_config_to_pod(
-        self,
-        pod_name: str,
-        verbose: bool = False,
-        github_token: str | None = None,
-        agent_name: str = "claude",
-        secret_env: dict[str, str] | None = None,
-    ) -> None:
-        """Sync all configuration to pod (delegates to ConfigSyncer)."""
-        self._syncer.sync_full_config(
-            pod_name,
-            verbose=verbose,
-            github_token=github_token,
-            agent_name=agent_name,
-            secret_env=secret_env,
-        )
-
-    def _rewrite_plugin_paths(self, pod_name: str, config_path: str) -> None:
-        """Rewrite plugin paths (delegates to ConfigSyncer)."""
-        self._syncer._rewrite_plugin_paths(pod_name, config_path)
 
     def start_session(self, name: str, github_token: str | None = None) -> int:
         """Start a session and connect to it.
@@ -847,10 +605,7 @@ class OpenShiftBackend:
         Returns:
             Exit code from the connected session.
         """
-        # Check if session exists
-        sts = self._get_statefulset(name)
-        if sts is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
+        self._require_session(name)
 
         pod_name = f"paude-{name}-0"
 
@@ -858,26 +613,16 @@ class OpenShiftBackend:
         print(f"Starting session '{name}'...", file=sys.stderr)
         self._scale_statefulset(name, 1)
 
-        # Wait for proxy to be ready (if it exists)
-        # Check if proxy deployment exists for this session
-        proxy_deployment = f"paude-proxy-{name}"
-        result = self._run_oc(
-            "get",
-            "deployment",
-            proxy_deployment,
-            "-n",
-            self.namespace,
-            check=False,
-        )
-        if result.returncode == 0:
-            # Proxy exists, scale it up and wait for ready
+        # Scale proxy up if it exists
+        if self._has_proxy_deployment(name):
+            proxy_deployment = f"paude-proxy-{name}"
             self._scale_deployment(proxy_deployment, 1)
-            self._wait_for_proxy_ready(name)
+            self._proxy.wait_for_ready(name)
 
         # Wait for pod to be ready
         print(f"Waiting for Pod/{pod_name} to be ready...", file=sys.stderr)
         try:
-            self._wait_for_pod_ready(pod_name)
+            self._pod_waiter.wait_for_ready(pod_name)
         except PodNotReadyError as e:
             print(f"Pod failed to start: {e}", file=sys.stderr)
             return 1
@@ -896,26 +641,15 @@ class OpenShiftBackend:
         Args:
             name: Session name.
         """
-        # Check if session exists
-        sts = self._get_statefulset(name)
-        if sts is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
+        self._require_session(name)
 
         # Scale to 0
         print(f"Stopping session '{name}'...", file=sys.stderr)
         self._scale_statefulset(name, 0)
 
         # Scale proxy to 0 if it exists
-        proxy_deployment = f"paude-proxy-{name}"
-        result = self._run_oc(
-            "get",
-            "deployment",
-            proxy_deployment,
-            "-n",
-            self.namespace,
-            check=False,
-        )
-        if result.returncode == 0:
+        if self._has_proxy_deployment(name):
+            proxy_deployment = f"paude-proxy-{name}"
             print(f"Stopping proxy '{proxy_deployment}'...", file=sys.stderr)
             self._scale_deployment(proxy_deployment, 0)
 
@@ -942,8 +676,8 @@ class OpenShiftBackend:
 
         ns = self.namespace
 
-        # Verify pod is running
-        result = self._run_oc(
+        # Verify pod is running (not just existing)
+        result = self._oc.run(
             "get",
             "pod",
             pod_name,
@@ -971,9 +705,9 @@ class OpenShiftBackend:
         secret_env = build_secret_environment_from_config(agent.config)
 
         # Check if this is first connect or reconnect
-        if self._is_config_synced(pod_name):
+        if self._syncer.is_config_synced(pod_name):
             # Reconnect: only refresh gcloud credentials (fast)
-            self._sync_credentials_to_pod(
+            self._syncer.sync_credentials(
                 pod_name,
                 verbose=False,
                 github_token=github_token,
@@ -982,7 +716,7 @@ class OpenShiftBackend:
             )
         else:
             # First connect: full config sync (gcloud + agent + git)
-            self._sync_config_to_pod(
+            self._syncer.sync_full_config(
                 pod_name,
                 verbose=False,
                 github_token=github_token,
@@ -991,7 +725,7 @@ class OpenShiftBackend:
             )
 
         # Check if workspace is empty (no .git directory)
-        check_result = self._run_oc(
+        check_result = self._oc.run(
             "exec",
             pod_name,
             "-n",
@@ -1048,44 +782,7 @@ class OpenShiftBackend:
         sts = self._get_statefulset(name)
         if sts is None:
             return None
-
-        metadata = sts.get("metadata", {})
-        labels = metadata.get("labels", {})
-        annotations = metadata.get("annotations", {})
-        spec = sts.get("spec", {})
-
-        # Determine status from replicas
-        replicas = spec.get("replicas", 0)
-        status_replicas = sts.get("status", {}).get("readyReplicas", 0)
-
-        if replicas == 0:
-            status = "stopped"
-        elif status_replicas > 0:
-            status = "running"
-        else:
-            status = "pending"
-
-        # Decode workspace
-        workspace_encoded = annotations.get("paude.io/workspace", "")
-        try:
-            workspace = (
-                decode_path(workspace_encoded)
-                if workspace_encoded
-                else Path("/workspace")
-            )
-        except Exception:
-            workspace = Path("/workspace")
-
-        return Session(
-            name=name,
-            status=status,
-            workspace=workspace,
-            created_at=annotations.get("paude.io/created-at", ""),
-            backend_type="openshift",
-            container_id=f"paude-{name}-0",
-            volume_name=f"workspace-paude-{name}-0",
-            agent=labels.get(PAUDE_LABEL_AGENT, "claude"),
-        )
+        return self._session_from_statefulset(sts, name=name)
 
     def find_session_for_workspace(self, workspace: Path) -> Session | None:
         """Find an existing session for the given workspace.
@@ -1117,20 +814,9 @@ class OpenShiftBackend:
         Raises:
             SessionNotFoundError: If session not found.
         """
-        if self._get_statefulset(name) is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
+        self._require_session(name)
 
-        # Check if proxy deployment exists
-        proxy_deployment = f"paude-proxy-{name}"
-        result = self._run_oc(
-            "get",
-            "deployment",
-            proxy_deployment,
-            "-n",
-            self.namespace,
-            check=False,
-        )
-        if result.returncode != 0:
+        if not self._has_proxy_deployment(name):
             return None  # No proxy = unrestricted
 
         return self._proxy.get_deployment_domains(name)
@@ -1146,23 +832,13 @@ class OpenShiftBackend:
             SessionNotFoundError: If session not found.
             ValueError: If proxy is not running.
         """
-        if self._get_statefulset(name) is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
+        self._require_session(name)
 
-        proxy_deployment = f"paude-proxy-{name}"
-        result = self._run_oc(
-            "get",
-            "deployment",
-            proxy_deployment,
-            "-n",
-            self.namespace,
-            check=False,
-        )
-        if result.returncode != 0:
+        if not self._has_proxy_deployment(name):
             return None
 
         # Find proxy pod
-        pod_result = self._run_oc(
+        pod_result = self._oc.run(
             "get",
             "pods",
             "-l",
@@ -1177,7 +853,7 @@ class OpenShiftBackend:
             raise ValueError(f"Proxy for session '{name}' is not running.")
 
         pod_name = pod_result.stdout.strip()
-        log_result = self._run_oc(
+        log_result = self._oc.run(
             "exec",
             pod_name,
             "-n",
@@ -1202,20 +878,9 @@ class OpenShiftBackend:
             SessionNotFoundError: If session not found.
             ValueError: If session has no proxy deployment.
         """
-        if self._get_statefulset(name) is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
+        self._require_session(name)
 
-        # Check if proxy deployment exists
-        proxy_deployment = f"paude-proxy-{name}"
-        result = self._run_oc(
-            "get",
-            "deployment",
-            proxy_deployment,
-            "-n",
-            self.namespace,
-            check=False,
-        )
-        if result.returncode != 0:
+        if not self._has_proxy_deployment(name):
             raise ValueError(
                 f"Session '{name}' has no proxy (unrestricted network). "
                 "Cannot update domains."
@@ -1237,15 +902,7 @@ class OpenShiftBackend:
             SessionNotFoundError: If session not found.
             ValueError: If session is not running.
         """
-        if self._get_statefulset(name) is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
-
-        pod_name = self._get_pod_for_session(name)
-        if pod_name is None:
-            raise ValueError(
-                f"Session '{name}' is not running. "
-                f"Use 'paude start {name}' to start it."
-            )
+        pod_name = self._require_running_pod(name)
 
         result = self._oc.run(
             "exec",
@@ -1273,15 +930,7 @@ class OpenShiftBackend:
             SessionNotFoundError: If session not found.
             ValueError: If session is not running.
         """
-        if self._get_statefulset(name) is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
-
-        pod_name = self._get_pod_for_session(name)
-        if pod_name is None:
-            raise ValueError(
-                f"Session '{name}' is not running. "
-                f"Use 'paude start {name}' to start it."
-            )
+        pod_name = self._require_running_pod(name)
 
         self._oc.run(
             "cp",
@@ -1304,15 +953,7 @@ class OpenShiftBackend:
             SessionNotFoundError: If session not found.
             ValueError: If session is not running.
         """
-        if self._get_statefulset(name) is None:
-            raise SessionNotFoundError(f"Session '{name}' not found")
-
-        pod_name = self._get_pod_for_session(name)
-        if pod_name is None:
-            raise ValueError(
-                f"Session '{name}' is not running. "
-                f"Use 'paude start {name}' to start it."
-            )
+        pod_name = self._require_running_pod(name)
 
         self._oc.run(
             "cp",
@@ -1329,14 +970,11 @@ class OpenShiftBackend:
         Returns:
             List of Session objects.
         """
-        ns = self.namespace
-        sessions = []
-
-        result = self._run_oc(
+        result = self._oc.run(
             "get",
             "statefulsets",
             "-n",
-            ns,
+            self.namespace,
             "-l",
             "app=paude",
             "-o",
@@ -1344,56 +982,13 @@ class OpenShiftBackend:
             check=False,
         )
 
-        if result.returncode == 0:
-            try:
-                data = json.loads(result.stdout)
-                for item in data.get("items", []):
-                    metadata = item.get("metadata", {})
-                    labels = metadata.get("labels", {})
-                    annotations = metadata.get("annotations", {})
-                    spec = item.get("spec", {})
-                    sts_status = item.get("status", {})
+        if result.returncode != 0:
+            return []
 
-                    session_name = labels.get("paude.io/session-name", "unknown")
-
-                    # Determine status from replicas
-                    replicas = spec.get("replicas", 0)
-                    ready_replicas = sts_status.get("readyReplicas", 0)
-
-                    if replicas == 0:
-                        status = "stopped"
-                    elif ready_replicas > 0:
-                        status = "running"
-                    else:
-                        status = "pending"
-
-                    # Decode workspace path
-                    workspace_encoded = annotations.get("paude.io/workspace", "")
-                    try:
-                        workspace = (
-                            decode_path(workspace_encoded)
-                            if workspace_encoded
-                            else Path("/workspace")
-                        )
-                    except Exception:
-                        workspace = Path("/workspace")
-
-                    created_at = annotations.get(
-                        "paude.io/created-at", metadata.get("creationTimestamp", "")
-                    )
-                    sessions.append(
-                        Session(
-                            name=session_name,
-                            status=status,
-                            workspace=workspace,
-                            created_at=created_at,
-                            backend_type="openshift",
-                            container_id=f"paude-{session_name}-0",
-                            volume_name=f"workspace-paude-{session_name}-0",
-                            agent=labels.get(PAUDE_LABEL_AGENT, "claude"),
-                        )
-                    )
-            except json.JSONDecodeError:
-                pass
-
-        return sessions
+        try:
+            data = json.loads(result.stdout)
+            return [
+                self._session_from_statefulset(item) for item in data.get("items", [])
+            ]
+        except json.JSONDecodeError:
+            return []
