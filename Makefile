@@ -7,8 +7,8 @@
 #   make clean          - Remove local images
 
 REGISTRY ?= quay.io/bbrowning
-IMAGE_NAME = paude-base-centos9
-PROXY_IMAGE_NAME = paude-proxy-centos9
+IMAGE_NAME = paude-base-centos10
+PROXY_IMAGE_NAME = paude-proxy-centos10
 
 # Get version from git tag, or use 'dev' if not on a tag
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null || echo "dev")

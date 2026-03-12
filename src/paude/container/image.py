@@ -89,9 +89,9 @@ class ImageManager:
         if self.dev_mode and self.script_dir:
             if self.platform:
                 arch = self.platform.split("/")[-1]
-                tag = f"paude-base-centos9:latest-{arch}"
+                tag = f"paude-base-centos10:latest-{arch}"
             else:
-                tag = "paude-base-centos9:latest"
+                tag = "paude-base-centos10:latest"
             if not image_exists(tag):
                 print(f"Building {tag} image...", file=sys.stderr)
                 dockerfile = self.script_dir / "containers" / "paude" / "Dockerfile"
@@ -99,7 +99,7 @@ class ImageManager:
                 self.build_image(dockerfile, tag, context)
             return tag
         else:
-            tag = f"{self.registry}/paude-base-centos9:{self.version}"
+            tag = f"{self.registry}/paude-base-centos10:{self.version}"
             if not image_exists(tag):
                 print(f"Pulling {tag}...", file=sys.stderr)
                 try:
@@ -268,9 +268,9 @@ class ImageManager:
         if self.dev_mode and self.script_dir:
             if self.platform:
                 arch = self.platform.split("/")[-1]
-                tag = f"paude-proxy-centos9:latest-{arch}"
+                tag = f"paude-proxy-centos10:latest-{arch}"
             else:
-                tag = "paude-proxy-centos9:latest"
+                tag = "paude-proxy-centos10:latest"
             if force_rebuild or not image_exists(tag):
                 print(f"Building {tag} image...", file=sys.stderr)
                 dockerfile = self.script_dir / "containers" / "proxy" / "Dockerfile"
@@ -278,7 +278,7 @@ class ImageManager:
                 self.build_image(dockerfile, tag, context)
             return tag
         else:
-            tag = f"{self.registry}/paude-proxy-centos9:{self.version}"
+            tag = f"{self.registry}/paude-proxy-centos10:{self.version}"
             if not image_exists(tag):
                 print(f"Pulling {tag}...", file=sys.stderr)
                 try:

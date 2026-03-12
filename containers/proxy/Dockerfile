@@ -1,7 +1,9 @@
-FROM quay.io/centos/centos:stream9
+FROM quay.io/centos/centos:stream10
 
-# Enable EPEL repository and install Squid + debugging tools
-RUN dnf install -y epel-release && \
+# Enable CRB and EPEL repository, install Squid + debugging tools
+RUN dnf install -y dnf-plugins-core && \
+    dnf config-manager --set-enabled crb && \
+    dnf install -y epel-release && \
     dnf install -y --allowerasing squid curl wget bind-utils iputils && \
     dnf clean all && \
     # Ensure squid runtime directories are writable (needed for OpenShift random UIDs)

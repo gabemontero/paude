@@ -262,7 +262,7 @@ class TestPrepareBuildContext:
         mock_gen: MagicMock,
         mock_resolve: MagicMock,
     ) -> None:
-        mock_resolve.return_value = "quay.io/bbrowning/paude-base-centos9:1.0"
+        mock_resolve.return_value = "quay.io/bbrowning/paude-base-centos10:1.0"
         mock_gen.return_value = "ARG BASE_IMAGE\nFROM ${BASE_IMAGE}\nRUN echo hi"
         config = PaudeConfig()
 
@@ -272,12 +272,12 @@ class TestPrepareBuildContext:
             result = prepare_build_context(config)
             assert isinstance(result, BuildContext)
             assert result.config_hash == "abc123"
-            assert result.base_image == "quay.io/bbrowning/paude-base-centos9:1.0"
+            assert result.base_image == "quay.io/bbrowning/paude-base-centos10:1.0"
             assert result.dockerfile_path.exists()
             # Verify BASE_IMAGE was replaced
             content = result.dockerfile_path.read_text()
             assert "ARG BASE_IMAGE" not in content
-            assert "quay.io/bbrowning/paude-base-centos9:1.0" in content
+            assert "quay.io/bbrowning/paude-base-centos10:1.0" in content
         finally:
             if result.context_dir.exists():
                 shutil.rmtree(result.context_dir)

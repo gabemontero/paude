@@ -51,9 +51,9 @@ jobs:
     strategy:
       matrix:
         image:
-          - name: paude-base-centos9
+          - name: paude-base-centos10
             context: ./containers/paude
-          - name: paude-proxy-centos9
+          - name: paude-proxy-centos10
             context: ./containers/proxy
     steps:
       - uses: actions/checkout@v4

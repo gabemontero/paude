@@ -1608,7 +1608,7 @@ class TestCreateSessionWithProxy:
         config = SessionConfig(
             name="test-session",
             workspace=Path("/home/user/project"),
-            image="quay.io/test/paude-base-centos9:v1",
+            image="quay.io/test/paude-base-centos10:v1",
             allowed_domains=[".googleapis.com", ".google.com"],
         )
 
@@ -1647,7 +1647,7 @@ class TestCreateSessionWithProxy:
         config = SessionConfig(
             name="test-session",
             workspace=Path("/home/user/project"),
-            image="quay.io/test/paude-base-centos9:v1",
+            image="quay.io/test/paude-base-centos10:v1",
             allowed_domains=[".googleapis.com", ".example.com"],
         )
 
@@ -1887,7 +1887,7 @@ class TestProxyImageDerivation:
         config = SessionConfig(
             name="test",
             workspace=Path("/project"),
-            image="quay.io/bbrowning/paude-base-centos9:v1.2.3",
+            image="quay.io/bbrowning/paude-base-centos10:v1.2.3",
             allowed_domains=[".googleapis.com"],
         )
 
@@ -1906,7 +1906,7 @@ class TestProxyImageDerivation:
         container = deployment_spec["spec"]["template"]["spec"]["containers"][0]
 
         # Verify the proxy image was derived correctly
-        assert container["image"] == "quay.io/bbrowning/paude-proxy-centos9:v1.2.3"
+        assert container["image"] == "quay.io/bbrowning/paude-proxy-centos10:v1.2.3"
 
     @patch("subprocess.run")
     def test_falls_back_to_default_when_pattern_not_found(
@@ -1950,7 +1950,7 @@ class TestProxyImageDerivation:
         container = deployment_spec["spec"]["template"]["spec"]["containers"][0]
 
         # Verify fallback to default proxy image
-        assert container["image"] == "quay.io/bbrowning/paude-proxy-centos9:latest"
+        assert container["image"] == "quay.io/bbrowning/paude-proxy-centos10:latest"
 
 
 class TestStartSessionWaitsForProxy:

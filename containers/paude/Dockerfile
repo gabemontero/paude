@@ -1,7 +1,9 @@
-FROM quay.io/centos/centos:stream9
+FROM quay.io/centos/centos:stream10
 
-# Enable EPEL for additional packages
-RUN dnf install -y epel-release && \
+# Enable CRB and EPEL for additional packages
+RUN dnf install -y dnf-plugins-core && \
+    dnf config-manager --set-enabled crb && \
+    dnf install -y epel-release && \
     dnf install -y --allowerasing \
         git \
         curl \
@@ -14,8 +16,8 @@ RUN dnf install -y epel-release && \
         make \
         ca-certificates \
         glibc-langpack-en \
-        python3.11 \
-        python3.11-pip \
+        python3.12 \
+        python3.12-pip \
         procps-ng \
         tmux \
         which \
@@ -34,8 +36,8 @@ RUN dnf install -y epel-release && \
         zip \
         tree \
     && dnf clean all && \
-    alternatives --install /usr/bin/python python /usr/bin/python3.11 1 && \
-    alternatives --install /usr/bin/python3 python3 /usr/bin/python3.11 1
+    alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
+    alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
 
 # Set UTF-8 locale
 ENV LANG=en_US.UTF-8
@@ -45,7 +47,7 @@ ENV LC_ALL=en_US.UTF-8
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh
 
 # Install pre-commit for automatic hook support in git-synced repos
-RUN pip3.11 install pre-commit
+RUN pip3.12 install pre-commit
 
 # Install GitHub CLI (gh)
 RUN curl -fsSL https://cli.github.com/packages/rpm/gh-cli.repo -o /etc/yum.repos.d/gh-cli.repo && \

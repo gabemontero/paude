@@ -90,7 +90,7 @@ class TestImageManager:
         assert mock_run.call_count == 2
         # First call builds base, second builds runtime
         first_call = mock_run.call_args_list[0][0]
-        assert "paude-base-centos9" in str(first_call)
+        assert "paude-base-centos10" in str(first_call)
         second_call = mock_run.call_args_list[1][0]
         assert "paude-runtime:" in str(second_call)
         assert "paude-runtime:" in result
@@ -142,7 +142,7 @@ class TestImageManager:
             manager = ImageManager(script_dir=tmp_path, platform="linux/amd64")
             result = manager.ensure_proxy_image()
 
-        assert result == "paude-proxy-centos9:latest-amd64"
+        assert result == "paude-proxy-centos10:latest-amd64"
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0]
         assert "build" in call_args
@@ -167,7 +167,7 @@ class TestImageManager:
             manager = ImageManager(script_dir=tmp_path, platform="linux/amd64")
             result = manager.ensure_proxy_image()
 
-        assert result == "paude-proxy-centos9:latest-amd64"
+        assert result == "paude-proxy-centos10:latest-amd64"
         mock_run.assert_not_called()
 
     @patch("paude.container.image.run_podman")
@@ -190,7 +190,7 @@ class TestImageManager:
             manager = ImageManager(script_dir=tmp_path, platform="linux/amd64")
             result = manager.ensure_proxy_image(force_rebuild=True)
 
-        assert result == "paude-proxy-centos9:latest-amd64"
+        assert result == "paude-proxy-centos10:latest-amd64"
         mock_run.assert_called_once()
         call_args = mock_run.call_args[0]
         assert "build" in call_args

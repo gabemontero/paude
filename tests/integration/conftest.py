@@ -16,8 +16,8 @@ from paude.backends.base import Session, SessionConfig
 from paude.backends.podman import PodmanBackend, SessionNotFoundError
 
 # Default test images - can be overridden via environment variables
-DEFAULT_PODMAN_IMAGE = "paude-base-centos9:latest"
-DEFAULT_K8S_IMAGE = "quay.io/bbrowning/paude-base-centos9:latest"
+DEFAULT_PODMAN_IMAGE = "paude-base-centos10:latest"
+DEFAULT_K8S_IMAGE = "quay.io/bbrowning/paude-base-centos10:latest"
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -100,7 +100,7 @@ def test_image_available(podman_available: bool) -> bool:
 
     try:
         result = subprocess.run(
-            ["podman", "image", "exists", "paude-base-centos9:latest"],
+            ["podman", "image", "exists", "paude-base-centos10:latest"],
             capture_output=True,
             timeout=10,
         )
@@ -175,7 +175,7 @@ def kubernetes_test_image() -> str:
     return os.environ.get("PAUDE_K8S_TEST_IMAGE", DEFAULT_K8S_IMAGE)
 
 
-DEFAULT_PROXY_IMAGE = "paude-proxy-centos9:latest"
+DEFAULT_PROXY_IMAGE = "paude-proxy-centos10:latest"
 
 
 @pytest.fixture(scope="session")

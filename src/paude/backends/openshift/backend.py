@@ -618,11 +618,11 @@ class OpenShiftBackend:
                 proxy_image = config.proxy_image
             else:
                 proxy_image = config.image.replace(
-                    "paude-base-centos9", "paude-proxy-centos9"
+                    "paude-base-centos10", "paude-proxy-centos10"
                 )
                 # If image doesn't contain the expected pattern, use a default
                 if proxy_image == config.image:
-                    proxy_image = "quay.io/bbrowning/paude-proxy-centos9:latest"
+                    proxy_image = "quay.io/bbrowning/paude-proxy-centos10:latest"
 
             self._create_proxy_deployment(
                 session_name, proxy_image, config.allowed_domains

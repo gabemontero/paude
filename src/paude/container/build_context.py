@@ -232,7 +232,7 @@ def _resolve_default_base(
     registry = os.environ.get("PAUDE_REGISTRY", "quay.io/bbrowning")
 
     if for_remote_build:
-        base_image = f"{registry}/paude-base-centos9:{__version__}"
+        base_image = f"{registry}/paude-base-centos10:{__version__}"
         print(f"  → Using registry image: {base_image}", file=sys.stderr)
         return base_image
 
@@ -240,9 +240,9 @@ def _resolve_default_base(
     if dev_mode and script_dir:
         if platform:
             arch = platform.split("/")[-1]
-            base_image = f"paude-base-centos9:latest-{arch}"
+            base_image = f"paude-base-centos10:latest-{arch}"
         else:
-            base_image = "paude-base-centos9:latest"
+            base_image = "paude-base-centos10:latest"
         if not image_exists(base_image):
             print(f"Building {base_image} image...", file=sys.stderr)
             dockerfile = script_dir / "containers" / "paude" / "Dockerfile"
@@ -253,7 +253,7 @@ def _resolve_default_base(
             cmd.append(str(context))
             run_podman(*cmd, capture=False)
     else:
-        base_image = f"{registry}/paude-base-centos9:{__version__}"
+        base_image = f"{registry}/paude-base-centos10:{__version__}"
         if not image_exists(base_image):
             print(f"Pulling {base_image}...", file=sys.stderr)
             run_podman("pull", base_image, capture=False)
