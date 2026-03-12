@@ -94,30 +94,30 @@ def test_dry_run_shows_flag_states():
         app, ["create", "--yolo", "--allowed-domains", "all", "--dry-run"]
     )
     assert result.exit_code == 0
-    assert "--yolo: True" in result.stdout
-    assert "--allowed-domains: unrestricted" in result.stdout
+    assert "yolo: True" in result.stdout
+    assert "allowed-domains: unrestricted" in result.stdout
 
 
 @pytest.mark.parametrize(
-    "flag",
+    ("flag", "name"),
     [
-        pytest.param("--yolo", id="yolo"),
-        pytest.param("--rebuild", id="rebuild"),
-        pytest.param("--verbose", id="verbose"),
+        pytest.param("--yolo", "yolo", id="yolo"),
+        pytest.param("--rebuild", "rebuild", id="rebuild"),
+        pytest.param("--verbose", "verbose", id="verbose"),
     ],
 )
-def test_flag_recognized(flag):
+def test_flag_recognized(flag, name):
     """Boolean flags are recognized (verified via dry-run)."""
     result = runner.invoke(app, ["create", flag, "--dry-run"])
     assert result.exit_code == 0
-    assert f"{flag}: True" in result.stdout
+    assert f"{name}: True" in result.stdout
 
 
 def test_allowed_domains_default_value():
     """Default --allowed-domains value shows vertexai + python."""
     result = runner.invoke(app, ["create", "--dry-run"])
     assert result.exit_code == 0
-    assert "--allowed-domains:" in result.stdout
+    assert "allowed-domains:" in result.stdout
     # Default should expand to vertexai + python
     assert "vertexai" in result.stdout or "python" in result.stdout
 
@@ -126,7 +126,7 @@ def test_allowed_domains_all_value():
     """--allowed-domains all shows unrestricted."""
     result = runner.invoke(app, ["create", "--allowed-domains", "all", "--dry-run"])
     assert result.exit_code == 0
-    assert "--allowed-domains: unrestricted" in result.stdout
+    assert "allowed-domains: unrestricted" in result.stdout
 
 
 def test_allowed_domains_custom_domain():
@@ -166,7 +166,7 @@ def test_args_option():
     """--args option is parsed and captured in claude_args (verified via dry-run)."""
     result = runner.invoke(app, ["create", "--dry-run", "--args", "-p hello"])
     assert result.exit_code == 0
-    assert "claude_args: ['-p', 'hello']" in result.stdout
+    assert "args: ['-p', 'hello']" in result.stdout
 
 
 def test_multiple_flags_work_together():
@@ -175,24 +175,24 @@ def test_multiple_flags_work_together():
         app, ["create", "--yolo", "--allowed-domains", "all", "--rebuild", "--dry-run"]
     )
     assert result.exit_code == 0
-    assert "--yolo: True" in result.stdout
-    assert "--allowed-domains: unrestricted" in result.stdout
-    assert "--rebuild: True" in result.stdout
+    assert "yolo: True" in result.stdout
+    assert "allowed-domains: unrestricted" in result.stdout
+    assert "rebuild: True" in result.stdout
 
 
 def test_backend_flag_recognized():
     """--backend flag is recognized (verified via dry-run)."""
     result = runner.invoke(app, ["create", "--backend=podman", "--dry-run"])
     assert result.exit_code == 0
-    assert "--backend: podman" in result.stdout
+    assert "backend: podman" in result.stdout
 
 
 def test_backend_openshift_shows_openshift_options():
     """--backend=openshift shows OpenShift-specific options."""
     result = runner.invoke(app, ["create", "--backend=openshift", "--dry-run"])
     assert result.exit_code == 0
-    assert "--backend: openshift" in result.stdout
-    assert "--openshift-namespace:" in result.stdout
+    assert "backend: openshift" in result.stdout
+    assert "openshift-namespace:" in result.stdout
 
 
 def test_github_domains_in_default_dry_run():
@@ -203,9 +203,9 @@ def test_github_domains_in_default_dry_run():
 
 
 def _extract_domains_display(stdout: str) -> str:
-    """Extract the --allowed-domains value from dry-run output."""
-    parts = stdout.split("--allowed-domains:")
-    assert len(parts) > 1, f"--allowed-domains not found in output:\n{stdout}"
+    """Extract the allowed-domains value from dry-run output."""
+    parts = stdout.split("allowed-domains:")
+    assert len(parts) > 1, f"allowed-domains not found in output:\n{stdout}"
     return parts[1].split("\n")[0].strip()
 
 
@@ -1228,7 +1228,9 @@ class TestDeleteGitRemoteCleanup:
     ):
         """Delete calls git remote cleanup after successful session deletion."""
         mock_podman = MagicMock()
-        mock_podman.get_session.return_value = MagicMock(workspace=Path("/some/project"))
+        mock_podman.get_session.return_value = MagicMock(
+            workspace=Path("/some/project")
+        )
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(
@@ -1363,7 +1365,9 @@ class TestDeleteGitRemoteCleanup:
         """Git remote cleanup is NOT called when session deletion fails."""
         mock_podman = MagicMock()
         mock_podman.delete_session.side_effect = Exception("Deletion failed")
-        mock_podman.get_session.return_value = MagicMock(workspace=Path("/some/project"))
+        mock_podman.get_session.return_value = MagicMock(
+            workspace=Path("/some/project")
+        )
         mock_podman_class.return_value = mock_podman
 
         result = runner.invoke(

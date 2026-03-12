@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from paude.config.models import FeatureSpec, PaudeConfig
+from paude.config.user_config import _warn_unknown_keys
 
 
 class ConfigError(Exception):
@@ -125,6 +126,10 @@ def _parse_devcontainer(config_file: Path, data: dict[str, Any]) -> PaudeConfig:
     # Warn about unsupported properties
     _warn_unsupported_properties(data)
 
+    # Parse create hints from customizations.paude.create
+    create_section = data.get("customizations", {}).get("paude", {}).get("create", {})
+    create_allowed_domains, create_agent = _parse_create_section(create_section)
+
     return PaudeConfig(
         config_file=config_file,
         config_type="devcontainer",
@@ -135,6 +140,8 @@ def _parse_devcontainer(config_file: Path, data: dict[str, Any]) -> PaudeConfig:
         post_create_command=post_create_command,
         container_env=container_env,
         build_args=build_args,
+        create_allowed_domains=create_allowed_domains,
+        create_agent=create_agent,
     )
 
 
@@ -167,6 +174,9 @@ def _parse_paude_json(config_file: Path, data: dict[str, Any]) -> PaudeConfig:
             file=sys.stderr,
         )
 
+    # Parse "create" section for create hints
+    create_allowed_domains, create_agent = _parse_create_section(data.get("create", {}))
+
     return PaudeConfig(
         config_file=config_file,
         config_type="paude",
@@ -176,7 +186,39 @@ def _parse_paude_json(config_file: Path, data: dict[str, Any]) -> PaudeConfig:
         build_args=build_args,
         packages=packages,
         post_create_command=setup_command,
+        create_allowed_domains=create_allowed_domains,
+        create_agent=create_agent,
     )
+
+
+_KNOWN_CREATE_KEYS = {"allowed-domains", "agent"}
+
+
+def _parse_create_section(
+    create_data: dict[str, Any],
+) -> tuple[list[str], str | None]:
+    """Parse the 'create' section from project config.
+
+    Args:
+        create_data: The parsed "create" object (may be empty).
+
+    Returns:
+        Tuple of (allowed_domains, agent).
+    """
+    if not isinstance(create_data, dict):
+        return [], None
+
+    _warn_unknown_keys(create_data, _KNOWN_CREATE_KEYS, "create section")
+
+    allowed_domains = create_data.get("allowed-domains", [])
+    if not isinstance(allowed_domains, list):
+        allowed_domains = []
+
+    agent = create_data.get("agent")
+    if agent is not None and not isinstance(agent, str):
+        agent = None
+
+    return allowed_domains, agent
 
 
 def _warn_unsupported_properties(data: dict[str, Any]) -> None:

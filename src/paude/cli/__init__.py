@@ -20,10 +20,13 @@ import paude.cli.status as _status  # noqa: F401
 from paude.cli.app import app as app
 from paude.cli.app import version_callback
 from paude.cli.commands import session_list
+from paude.cli.config_cmd import config_app
 from paude.cli.create import session_create as session_create
 from paude.cli.help import help_callback
 from paude.cli.helpers import _parse_copy_path as _parse_copy_path
 from paude.cli.helpers import find_session_backend as find_session_backend
+
+app.add_typer(config_app)
 
 
 @app.callback(invoke_without_command=True)

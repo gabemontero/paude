@@ -25,6 +25,7 @@ COMMANDS:
                         Manage allowed egress domains for a session
     blocked-domains NAME
                         Show domains blocked by the proxy for a session
+    config <ACTION>     Manage paude configuration
     delete NAME         Delete a session and all its resources
 
 OPTIONS (for 'create' command):
@@ -107,6 +108,15 @@ EXAMPLES:
     paude create --dry-run          Verify configuration without creating
     paude create --backend=openshift
                                     Create session on OpenShift cluster
+
+CONFIGURATION:
+    paude config show               Show resolved defaults for current directory
+    paude config path               Print user config file path
+    paude config init               Create starter ~/.config/paude/defaults.json
+
+    Settings are resolved with precedence: CLI flags > paude.json > user defaults.
+    User defaults: ~/.config/paude/defaults.json (backend, yolo, git, domains, etc.)
+    Project hints: paude.json "create" section (allowed-domains, agent)
 
 SECURITY:
     By default, paude runs with network restricted to Vertex AI, PyPI, and GitHub.

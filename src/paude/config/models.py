@@ -49,3 +49,7 @@ class PaudeConfig:
 
     # Build arguments
     build_args: dict[str, str] = field(default_factory=dict)
+
+    # Create hints (from paude.json "create" section)
+    create_allowed_domains: list[str] = field(default_factory=list)
+    create_agent: str | None = None

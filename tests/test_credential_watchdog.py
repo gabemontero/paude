@@ -141,7 +141,7 @@ class TestCLICredentialTimeout:
 
         assert "credential_timeout" in params
         param = params["credential_timeout"]
-        assert param.default == 60
+        assert param.default is None
 
     def test_cli_credential_timeout_annotation(self) -> None:
         """--credential-timeout has proper annotation."""

@@ -320,6 +320,68 @@ class TestParseConfig:
         assert config.post_create_command is None
         assert config.build_args == {}
 
+    def test_parses_paude_json_create_section(self, tmp_path: Path):
+        """parse_config extracts create section from paude.json."""
+        config_file = tmp_path / "paude.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "base": "python:3.11",
+                    "create": {
+                        "allowed-domains": [".vllm.ai", ".openai.com"],
+                        "agent": "gemini",
+                    },
+                }
+            )
+        )
+
+        config = parse_config(config_file)
+        assert config.create_allowed_domains == [".vllm.ai", ".openai.com"]
+        assert config.create_agent == "gemini"
+
+    def test_parses_paude_json_create_section_empty(self, tmp_path: Path):
+        """parse_config handles missing create section gracefully."""
+        config_file = tmp_path / "paude.json"
+        config_file.write_text(json.dumps({"base": "python:3.11"}))
+
+        config = parse_config(config_file)
+        assert config.create_allowed_domains == []
+        assert config.create_agent is None
+
+    def test_parses_devcontainer_create_section(self, tmp_path: Path):
+        """parse_config extracts create hints from devcontainer customizations."""
+        config_file = tmp_path / ".devcontainer.json"
+        config_file.write_text(
+            json.dumps(
+                {
+                    "image": "python:3.11",
+                    "customizations": {
+                        "paude": {
+                            "create": {
+                                "allowed-domains": ["golang", ".example.com"],
+                                "agent": "claude",
+                            }
+                        }
+                    },
+                }
+            )
+        )
+
+        config = parse_config(config_file)
+        assert config.create_allowed_domains == ["golang", ".example.com"]
+        assert config.create_agent == "claude"
+
+    def test_warns_unknown_create_keys(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ):
+        """parse_config warns about unknown keys in create section."""
+        config_file = tmp_path / "paude.json"
+        config_file.write_text(json.dumps({"create": {"unknown-field": "value"}}))
+
+        parse_config(config_file)
+        captured = capsys.readouterr()
+        assert "Unknown key 'unknown-field'" in captured.err
+
 
 class TestGenerateWorkspaceDockerfile:
     """Tests for Dockerfile generation."""

@@ -71,7 +71,7 @@ class TestFullFlow:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["create", "--allowed-domains", "all", "--dry-run"])
         assert result.exit_code == 0
-        assert "--allowed-domains: unrestricted" in result.stdout
+        assert "allowed-domains: unrestricted" in result.stdout
 
     def test_yolo_flag_recognized(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -80,7 +80,7 @@ class TestFullFlow:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["create", "--yolo", "--dry-run"])
         assert result.exit_code == 0
-        assert "--yolo: True" in result.stdout
+        assert "yolo: True" in result.stdout
 
     def test_rebuild_flag_recognized(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -89,4 +89,4 @@ class TestFullFlow:
         monkeypatch.chdir(tmp_path)
         result = runner.invoke(app, ["create", "--rebuild", "--dry-run"])
         assert result.exit_code == 0
-        assert "--rebuild: True" in result.stdout
+        assert "rebuild: True" in result.stdout

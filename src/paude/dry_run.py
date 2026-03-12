@@ -10,24 +10,20 @@ import typer
 from paude.agents import get_agent
 from paude.config import detect_config, parse_config
 from paude.config.dockerfile import generate_workspace_dockerfile
+from paude.config.resolver import ResolvedCreateOptions, format_setting
 from paude.domains import format_domains_for_display
 
 
-def show_dry_run(flags: dict[str, Any]) -> None:
+def show_dry_run(
+    flags: dict[str, Any],
+    resolved: ResolvedCreateOptions | None = None,
+) -> None:
     """Show configuration and what would be done without executing.
 
-    Output sections:
-    1. Workspace path
-    2. Configuration file and type (or "none")
-    3. Base image or Dockerfile
-    4. Additional packages (if any)
-    5. Setup command (if any)
-    6. Would build: image:hash (if custom)
-    7. Generated Dockerfile (if custom)
-    8. Flags summary
-
     Args:
-        flags: Dictionary containing CLI flags (yolo, allowed_domains, rebuild, etc.)
+        flags: Dictionary containing CLI flags.
+        resolved: Resolved create options with provenance (optional for
+            backward compatibility).
     """
     workspace = Path.cwd()
 
@@ -79,19 +75,63 @@ def show_dry_run(flags: dict[str, Any]) -> None:
         typer.echo("Using default paude container")
 
     typer.echo("")
+
+    if resolved is not None:
+        _show_resolved_flags(flags, resolved)
+    else:
+        _show_legacy_flags(flags)
+
+
+def _show_resolved_flags(
+    flags: dict[str, Any], resolved: ResolvedCreateOptions
+) -> None:
+    """Show flags with provenance from resolved options."""
+    typer.echo("Flags:")
+    typer.echo(format_setting("backend", resolved.backend))
+    typer.echo(f"  verbose: {flags.get('verbose', False)}")
+    typer.echo(format_setting("agent", resolved.agent))
+    typer.echo(format_setting("yolo", resolved.yolo))
+    typer.echo(format_setting("git", resolved.git))
+
+    # Domains with provenance
+    allowed_domains = flags.get("allowed_domains")
+    domains_display = format_domains_for_display(allowed_domains)
+    if resolved.allowed_domains_provenance:
+        typer.echo(f"  allowed-domains: {domains_display}")
+        for domains, source in resolved.allowed_domains_provenance:
+            typer.echo(f"    {', '.join(domains)}  ({source})")
+    else:
+        typer.echo(f"  allowed-domains: {domains_display}  (built-in)")
+
+    typer.echo(f"  rebuild: {flags.get('rebuild', False)}")
+
+    backend_val = resolved.backend.value
+    if backend_val == "openshift":
+        typer.echo(format_setting("openshift-context", resolved.openshift_context))
+        typer.echo(format_setting("openshift-namespace", resolved.openshift_namespace))
+        typer.echo(format_setting("pvc-size", resolved.pvc_size))
+        typer.echo(format_setting("credential-timeout", resolved.credential_timeout))
+
+    if resolved.platform.value is not None:
+        typer.echo(format_setting("platform", resolved.platform))
+
+    if flags.get("claude_args"):
+        typer.echo(f"  args: {flags['claude_args']}")
+
+
+def _show_legacy_flags(flags: dict[str, Any]) -> None:
+    """Show flags without provenance (backward compatibility)."""
     typer.echo("Flags:")
     typer.echo(f"  --backend: {flags.get('backend', 'podman')}")
     typer.echo(f"  --verbose: {flags.get('verbose', False)}")
     typer.echo(f"  --yolo: {flags.get('yolo', False)}")
 
-    # Show allowed domains with expansion
     allowed_domains = flags.get("allowed_domains")
     domains_display = format_domains_for_display(allowed_domains)
     typer.echo(f"  --allowed-domains: {domains_display}")
 
     typer.echo(f"  --rebuild: {flags.get('rebuild', False)}")
 
-    # OpenShift-specific options
     backend = flags.get("backend", "podman")
     if backend == "openshift":
         ctx = flags.get("openshift_context") or "(current context)"
