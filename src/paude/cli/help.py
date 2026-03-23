@@ -105,6 +105,14 @@ _SECTIONS: tuple[HelpSection, ...] = (
             ("paude create --dry-run", "Verify configuration without creating"),
             ("paude create --backend=docker", "Create session using Docker engine"),
             ("paude create --backend=openshift", "Create session on OpenShift cluster"),
+            (
+                "paude create --backend=docker --host user@gpu-box",
+                "Run container on remote host via SSH",
+            ),
+            (
+                "paude create --host user@host --ssh-key ~/.ssh/id_ed25519",
+                "Remote host with specific SSH key",
+            ),
         ),
     ),
     HelpSection(

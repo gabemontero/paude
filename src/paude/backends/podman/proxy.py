@@ -14,18 +14,56 @@ from paude.backends.shared import (
     PAUDE_LABEL_PROXY_IMAGE,
     SQUID_BLOCKED_LOG_PATH,
 )
+from paude.container.engine import ContainerEngine
 from paude.container.network import NetworkManager
 from paude.container.proxy_runner import ProxyRunner
 from paude.container.runner import ContainerRunner
-from paude.platform import get_podman_machine_dns
+from paude.platform import get_podman_machine_dns, is_macos
 
 
-def _get_and_log_dns() -> str | None:
-    """Get Podman VM DNS and log if available."""
-    dns = get_podman_machine_dns()
-    if dns:
-        print(f"Using Podman VM DNS: {dns}", file=sys.stderr)
-    return dns
+def _get_host_dns(engine: ContainerEngine) -> str | None:
+    """Get the primary DNS server for the container host.
+
+    Reads /etc/resolv.conf on the container host via the engine's
+    transport (local or SSH). The only exception is local Podman on
+    macOS, where containers run inside a VM — in that case we read
+    DNS from the Podman VM instead.
+    """
+    # Local Podman on macOS: containers run in a VM, so the host's
+    # resolv.conf isn't what containers see.
+    if engine.binary == "podman" and not engine.is_remote and is_macos():
+        dns = get_podman_machine_dns()
+        if dns:
+            print(f"Using Podman VM DNS: {dns}", file=sys.stderr)
+        return dns
+
+    # All other cases: read resolv.conf from the container host
+    # (locally or via SSH transport for remote hosts).
+    return _read_resolv_conf(engine)
+
+
+def _read_resolv_conf(engine: ContainerEngine) -> str | None:
+    """Read the first non-loopback nameserver from the host's resolv.conf."""
+    try:
+        result = engine.transport.run(
+            ["grep", "nameserver", "/etc/resolv.conf"],
+            check=False,
+        )
+        output = result.stdout.strip()
+        if result.returncode == 0 and output:
+            for line in output.split("\n"):
+                parts = line.split()
+                if len(parts) >= 2 and parts[0] == "nameserver":
+                    ip = parts[1]
+                    # Skip loopback DNS (e.g. systemd-resolved 127.0.0.53)
+                    # — not reachable from inside containers
+                    if ip.startswith("127."):
+                        continue
+                    print(f"Using host DNS: {ip}", file=sys.stderr)
+                    return ip
+    except Exception:  # noqa: S110 - best-effort DNS discovery
+        pass
+    return None
 
 
 class PodmanProxyManager:
@@ -85,7 +123,7 @@ class PodmanProxyManager:
 
         self._network_manager.create_internal_network(nname)
 
-        dns = _get_and_log_dns()
+        dns = _get_host_dns(self._runner.engine)
         print(f"Recreating missing proxy {pname}...", file=sys.stderr)
         self._proxy_runner.create_session_proxy(
             name=pname,
@@ -125,7 +163,7 @@ class PodmanProxyManager:
         self._network_manager.create_internal_network(nname)
 
         pname = proxy_container_name(session_name)
-        dns = _get_and_log_dns()
+        dns = _get_host_dns(self._runner.engine)
         print(f"Creating proxy {pname}...", file=sys.stderr)
         try:
             self._proxy_runner.create_session_proxy(
@@ -183,7 +221,7 @@ class PodmanProxyManager:
             raise ValueError(f"Cannot inspect proxy container: {pname}")
 
         nname = network_name(session_name)
-        dns = _get_and_log_dns()
+        dns = _get_host_dns(self._runner.engine)
 
         print(
             f"Updating proxy domains for session '{session_name}'...",

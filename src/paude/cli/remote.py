@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
 
 import typer
 
@@ -19,6 +19,9 @@ from paude.backends.shared import (
 from paude.cli.app import app
 from paude.cli.helpers import find_session_backend
 from paude.session_discovery import find_workspace_session
+
+if TYPE_CHECKING:
+    from paude.transport.base import Transport
 
 
 @app.command("remote")
@@ -228,12 +231,26 @@ def _find_session_for_remote(
     return (None, None)
 
 
+def _build_transport(
+    ssh_host: str | None, ssh_key: str | None = None
+) -> Transport | None:
+    """Create an SSH transport if ssh_host is set, otherwise return None."""
+    if not ssh_host:
+        return None
+    from paude.transport.ssh import SshTransport, parse_ssh_host
+
+    host, port = parse_ssh_host(ssh_host)
+    return SshTransport(host, key=ssh_key, port=port)
+
+
 def _setup_git_after_create(
     session_name: str,
     backend_type: str,
     openshift_context: str | None = None,
     openshift_namespace: str | None = None,
     no_clone_origin: bool = False,
+    ssh_host: str | None = None,
+    ssh_key: str | None = None,
 ) -> bool:
     """Set up git remote, push code and tags, and configure origin after create.
 
@@ -247,6 +264,8 @@ def _setup_git_after_create(
         openshift_context: OpenShift context (if applicable).
         openshift_namespace: OpenShift namespace (if applicable).
         no_clone_origin: Skip clone-from-origin optimization.
+        ssh_host: SSH host for remote execution (if applicable).
+        ssh_key: SSH key for remote execution (if applicable).
 
     Returns:
         True if all steps succeeded, False if any step failed.
@@ -257,6 +276,9 @@ def _setup_git_after_create(
         is_git_repository,
         ssh_url_to_https,
     )
+
+    # Build transport for remote SSH sessions
+    transport = _build_transport(ssh_host, ssh_key)
 
     if not is_git_repository():
         typer.echo(
@@ -286,6 +308,7 @@ def _setup_git_after_create(
             origin_https_url=origin_https_url,
             openshift_context=openshift_context,
             openshift_namespace=openshift_namespace,
+            transport=transport,
         )
 
     if cloned:
@@ -295,6 +318,7 @@ def _setup_git_after_create(
             branch=branch or "main",
             openshift_context=openshift_context,
             openshift_namespace=openshift_namespace,
+            transport=transport,
         )
     else:
         _setup_full_push(
@@ -304,6 +328,7 @@ def _setup_git_after_create(
             origin_https_url=origin_https_url,
             openshift_context=openshift_context,
             openshift_namespace=openshift_namespace,
+            transport=transport,
         )
 
     # Set up pre-commit hooks if config exists
@@ -312,6 +337,7 @@ def _setup_git_after_create(
         backend_type=backend_type,
         openshift_context=openshift_context,
         openshift_namespace=openshift_namespace,
+        transport=transport,
     )
 
     typer.echo("Git setup complete.")
@@ -324,6 +350,7 @@ def _try_clone_from_origin(
     origin_https_url: str,
     openshift_context: str | None,
     openshift_namespace: str | None,
+    transport: Transport | None = None,
 ) -> bool:
     """Try to clone from origin inside the container. Returns True on success."""
     from paude.git_remote import (
@@ -336,7 +363,9 @@ def _try_clone_from_origin(
     if is_local_backend(backend_type):
         cname = resource_name(session_name)
         engine = engine_binary_for_backend(backend_type)
-        success = clone_from_origin_podman(cname, origin_https_url, engine=engine)
+        success = clone_from_origin_podman(
+            cname, origin_https_url, engine=engine, transport=transport
+        )
     else:
         pname = pod_name(session_name)
         namespace = openshift_namespace or "default"
@@ -358,6 +387,7 @@ def _setup_after_clone(
     branch: str,
     openshift_context: str | None,
     openshift_namespace: str | None,
+    transport: Transport | None = None,
 ) -> None:
     """Post-clone setup: add ext:: remote, push delta, set base ref."""
     from paude.git_remote import (
@@ -373,6 +403,7 @@ def _setup_after_clone(
         openshift_context=openshift_context,
         openshift_namespace=openshift_namespace,
         push=False,
+        transport=transport,
     )
 
     # Check if local has commits not in origin. If local is at or behind
@@ -399,7 +430,9 @@ def _setup_after_clone(
     # Set base ref
     if is_local_backend(backend_type):
         engine = engine_binary_for_backend(backend_type)
-        set_base_ref_in_container_podman(resource_name(session_name), engine=engine)
+        set_base_ref_in_container_podman(
+            resource_name(session_name), engine=engine, transport=transport
+        )
     else:
         pname = pod_name(session_name)
         namespace = openshift_namespace or "default"
@@ -418,6 +451,7 @@ def _setup_full_push(
     origin_https_url: str | None,
     openshift_context: str | None,
     openshift_namespace: str | None,
+    transport: Transport | None = None,
 ) -> None:
     """Original full-push flow: init, push all, set origin."""
     from paude.git_remote import (
@@ -435,6 +469,7 @@ def _setup_full_push(
         openshift_context=openshift_context,
         openshift_namespace=openshift_namespace,
         push=False,
+        transport=transport,
     )
 
     # Push current branch
@@ -447,7 +482,9 @@ def _setup_full_push(
     # Set base ref
     if is_local_backend(backend_type):
         engine = engine_binary_for_backend(backend_type)
-        set_base_ref_in_container_podman(resource_name(session_name), engine=engine)
+        set_base_ref_in_container_podman(
+            resource_name(session_name), engine=engine, transport=transport
+        )
     else:
         pname = pod_name(session_name)
         namespace = openshift_namespace or "default"
@@ -464,7 +501,10 @@ def _setup_full_push(
         if is_local_backend(backend_type):
             engine = engine_binary_for_backend(backend_type)
             origin_set = set_origin_in_container_podman(
-                resource_name(session_name), origin_https_url, engine=engine
+                resource_name(session_name),
+                origin_https_url,
+                engine=engine,
+                transport=transport,
             )
         else:
             origin_set = set_origin_in_container_openshift(
@@ -484,6 +524,7 @@ def _setup_precommit(
     backend_type: str,
     openshift_context: str | None,
     openshift_namespace: str | None,
+    transport: Transport | None = None,
 ) -> None:
     """Set up pre-commit hooks if config exists."""
     from paude.git_remote import (
@@ -498,7 +539,7 @@ def _setup_precommit(
     if is_local_backend(backend_type):
         engine = engine_binary_for_backend(backend_type)
         success = setup_precommit_in_container_podman(
-            resource_name(session_name), engine=engine
+            resource_name(session_name), engine=engine, transport=transport
         )
     else:
         success = setup_precommit_in_container_openshift(
@@ -518,6 +559,7 @@ def _remote_add(
     openshift_context: str | None,
     openshift_namespace: str | None,
     push: bool = False,
+    transport: Transport | None = None,
 ) -> None:
     """Add a git remote for a session."""
     from paude.git_remote import (
@@ -626,8 +668,22 @@ def _remote_add(
         cname = resource_name(session.name)
         engine = engine_binary_for_backend(session.backend_type)
 
+        # Look up registry once for transport and remote URL building
+        from paude.git_remote import build_ssh_remote_url
+        from paude.registry import SessionRegistry
+
+        registry_entry = SessionRegistry().get(session.name)
+
+        effective_transport = transport
+        if effective_transport is None and registry_entry and registry_entry.ssh_host:
+            effective_transport = _build_transport(
+                registry_entry.ssh_host, registry_entry.ssh_key
+            )
+
         # Check if container is running
-        if not is_container_running_podman(cname, engine=engine):
+        if not is_container_running_podman(
+            cname, engine=engine, transport=effective_transport
+        ):
             typer.echo("Error: Container not running.", err=True)
             typer.echo("Start it first:", err=True)
             typer.echo(f"  paude start {session.name}", err=True)
@@ -636,11 +692,24 @@ def _remote_add(
         # Initialize git repository in container
         typer.echo("Initializing git repository in container...")
         if not initialize_container_workspace_podman(
-            cname, branch=branch, engine=engine
+            cname, branch=branch, engine=engine, transport=effective_transport
         ):
             raise typer.Exit(1)
 
-        remote_url = build_podman_remote_url(container_name=cname, engine=engine)
+        # Build appropriate remote URL
+        if registry_entry and registry_entry.ssh_host:
+            from paude.transport.ssh import parse_ssh_host
+
+            ssh_host_parsed, ssh_port = parse_ssh_host(registry_entry.ssh_host)
+            remote_url = build_ssh_remote_url(
+                container_name=cname,
+                ssh_host=ssh_host_parsed,
+                engine=engine,
+                ssh_key=registry_entry.ssh_key,
+                ssh_port=ssh_port,
+            )
+        else:
+            remote_url = build_podman_remote_url(container_name=cname, engine=engine)
 
     # Add the remote
     if git_remote_add(rname, remote_url):
@@ -658,7 +727,9 @@ def _remote_add(
                     pname, namespace, context=openshift_context
                 )
             else:
-                set_base_ref_in_container_podman(cname, engine=engine)
+                set_base_ref_in_container_podman(
+                    cname, engine=engine, transport=effective_transport
+                )
             typer.echo("Push complete.")
         else:
             typer.echo("")

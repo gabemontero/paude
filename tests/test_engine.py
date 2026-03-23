@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import subprocess
 from unittest.mock import MagicMock, patch
 
 from paude.container.engine import ContainerEngine
+from paude.transport import LocalTransport, SshTransport
 
 
 class TestContainerEngineInit:
@@ -44,7 +46,7 @@ class TestContainerEngineProperties:
 class TestContainerEngineRun:
     """Tests for ContainerEngine.run method."""
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_run_prepends_binary(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
         engine = ContainerEngine("podman")
@@ -54,9 +56,11 @@ class TestContainerEngineRun:
             check=True,
             capture_output=True,
             text=True,
+            input=None,
+            timeout=None,
         )
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_run_docker_binary(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0, stdout="ok", stderr="")
         engine = ContainerEngine("docker")
@@ -66,16 +70,18 @@ class TestContainerEngineRun:
             check=True,
             capture_output=True,
             text=True,
+            input=None,
+            timeout=None,
         )
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_run_no_check(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="err")
         engine = ContainerEngine()
         result = engine.run("bad-cmd", check=False)
         assert result.returncode == 1
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_run_no_capture(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine()
@@ -85,13 +91,15 @@ class TestContainerEngineRun:
             check=True,
             capture_output=False,
             text=True,
+            input=None,
+            timeout=None,
         )
 
 
 class TestContainerEngineImageExists:
     """Tests for ContainerEngine.image_exists method."""
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_podman_image_exists_uses_podman_command(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("podman")
@@ -99,7 +107,7 @@ class TestContainerEngineImageExists:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["podman", "image", "exists", "myimage:latest"]
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_docker_image_exists_uses_inspect(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("docker")
@@ -107,7 +115,7 @@ class TestContainerEngineImageExists:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["docker", "image", "inspect", "myimage:latest"]
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_image_not_found(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=1)
         engine = ContainerEngine("podman")
@@ -117,7 +125,7 @@ class TestContainerEngineImageExists:
 class TestContainerEngineNetworkExists:
     """Tests for ContainerEngine.network_exists method."""
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_podman_network_exists(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("podman")
@@ -125,7 +133,7 @@ class TestContainerEngineNetworkExists:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["podman", "network", "exists", "mynet"]
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_docker_network_exists_uses_inspect(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("docker")
@@ -137,7 +145,7 @@ class TestContainerEngineNetworkExists:
 class TestContainerEngineVolumeExists:
     """Tests for ContainerEngine.volume_exists method."""
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_podman_volume_exists(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("podman")
@@ -145,7 +153,7 @@ class TestContainerEngineVolumeExists:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["podman", "volume", "exists", "myvol"]
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_docker_volume_exists_uses_inspect(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("docker")
@@ -157,7 +165,7 @@ class TestContainerEngineVolumeExists:
 class TestContainerEngineContainerExists:
     """Tests for ContainerEngine.container_exists method."""
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_podman_container_exists(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("podman")
@@ -165,7 +173,7 @@ class TestContainerEngineContainerExists:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["podman", "container", "exists", "mycontainer"]
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_docker_container_exists_uses_inspect(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=0)
         engine = ContainerEngine("docker")
@@ -173,8 +181,50 @@ class TestContainerEngineContainerExists:
         cmd = mock_run.call_args[0][0]
         assert cmd == ["docker", "container", "inspect", "mycontainer"]
 
-    @patch("subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_container_not_found(self, mock_run: MagicMock) -> None:
         mock_run.return_value = MagicMock(returncode=1)
         engine = ContainerEngine("docker")
         assert engine.container_exists("missing") is False
+
+
+class TestContainerEngineTransport:
+    """Tests for transport integration."""
+
+    def test_default_transport_is_local(self) -> None:
+        engine = ContainerEngine()
+        assert isinstance(engine._transport, LocalTransport)
+        assert engine.is_remote is False
+        assert engine.host_label == "local"
+
+    def test_custom_transport(self) -> None:
+        transport = SshTransport("user@gpu-server")
+        engine = ContainerEngine("docker", transport=transport)
+        assert engine.is_remote is True
+        assert engine.host_label == "user@gpu-server"
+        assert engine.transport is transport
+
+    @patch("paude.transport.ssh.subprocess.run")
+    def test_ssh_transport_prefixes_commands(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="", stderr=""
+        )
+        transport = SshTransport("user@host")
+        engine = ContainerEngine("docker", transport=transport)
+        engine.run("ps", "-a", check=False)
+        args = mock_run.call_args[0][0]
+        assert args[0] == "ssh"
+        assert "user@host" in args
+        # Should end with: ... -- 'docker ps -a' (shell-quoted single string)
+        idx = args.index("--")
+        assert args[idx + 1 :] == ["docker ps -a"]
+
+    @patch("paude.transport.ssh.subprocess.run")
+    def test_run_interactive_through_transport(self, mock_run: MagicMock) -> None:
+        mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=42)
+        transport = SshTransport("user@host")
+        engine = ContainerEngine("docker", transport=transport)
+        rc = engine.run_interactive("exec", "-it", "ctr", "bash")
+        assert rc == 42
+        args = mock_run.call_args[0][0]
+        assert "-t" in args  # SSH TTY flag

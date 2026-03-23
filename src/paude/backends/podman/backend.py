@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
@@ -492,20 +491,12 @@ class PodmanBackend:
     def copy_to_session(self, name: str, local_path: str, remote_path: str) -> None:
         """Copy a file or directory from local to a running session."""
         cname = self._require_running_session(name)
-
-        subprocess.run(
-            [self._engine.binary, "cp", local_path, f"{cname}:{remote_path}"],
-            check=True,
-        )
+        self._engine.run("cp", local_path, f"{cname}:{remote_path}")
 
     def copy_from_session(self, name: str, remote_path: str, local_path: str) -> None:
         """Copy a file or directory from a running session to local."""
         cname = self._require_running_session(name)
-
-        subprocess.run(
-            [self._engine.binary, "cp", f"{cname}:{remote_path}", local_path],
-            check=True,
-        )
+        self._engine.run("cp", f"{cname}:{remote_path}", local_path)
 
     def stop_container(self, name: str) -> None:
         """Stop a container by name."""

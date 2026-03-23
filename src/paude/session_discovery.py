@@ -94,7 +94,67 @@ def find_workspace_session(
         except Exception:  # noqa: S110
             pass
 
+    # Check SSH sessions from registry
+    result = _find_ssh_workspace_session(workspace, status_filter)
+    if result is not None:
+        return result
+
     return None
+
+
+def _build_ssh_backend(entry: object) -> PodmanBackend | None:
+    """Reconstruct a PodmanBackend with SSH transport from a registry entry."""
+    from paude.backends.shared import build_ssh_backend
+
+    return build_ssh_backend(entry)
+
+
+def _find_ssh_workspace_session(
+    workspace: Path,
+    status_filter: str | None = None,
+) -> tuple[Session, Backend] | None:
+    """Find SSH sessions for the given workspace via the local registry."""
+    from paude.registry import SessionRegistry
+
+    registry = SessionRegistry()
+    for entry in registry.list_entries():
+        if not entry.ssh_host:
+            continue
+        if entry.workspace and Path(entry.workspace) != workspace:
+            continue
+        backend = _build_ssh_backend(entry)
+        if backend is None:
+            continue
+        try:
+            session = backend.get_session(entry.name)
+            if session and _status_matches(session.status, status_filter):
+                return (session, backend)
+        except Exception:  # noqa: S110 - remote may be unreachable
+            pass
+    return None
+
+
+def _collect_ssh_sessions(
+    status_filter: str | None = None,
+) -> list[tuple[Session, Backend]]:
+    """Collect sessions from SSH remotes registered in the local registry."""
+    from paude.registry import SessionRegistry
+
+    results: list[tuple[Session, Backend]] = []
+    registry = SessionRegistry()
+    for entry in registry.list_entries():
+        if not entry.ssh_host:
+            continue
+        backend = _build_ssh_backend(entry)
+        if backend is None:
+            continue
+        try:
+            session = backend.get_session(entry.name)
+            if session and _status_matches(session.status, status_filter):
+                results.append((session, backend))
+        except Exception:  # noqa: S110 - remote may be unreachable
+            pass
+    return results
 
 
 def collect_all_sessions(
@@ -168,6 +228,16 @@ def collect_all_sessions(
                 reachable_backends.add("openshift")
             except Exception:  # noqa: S110
                 pass
+
+    # Try SSH sessions from registry
+    ssh_sessions = _collect_ssh_sessions(status_filter)
+    if ssh_sessions:
+        # Deduplicate: skip SSH sessions already found locally
+        known_names = {s.name for s, _ in all_sessions}
+        for s, b in ssh_sessions:
+            if s.name not in known_names:
+                all_sessions.append((s, b))
+        reachable_backends.add("ssh")
 
     return all_sessions, reachable_backends
 

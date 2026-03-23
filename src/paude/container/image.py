@@ -20,6 +20,7 @@ from paude.container.build_context import (
 )
 from paude.container.engine import ContainerEngine
 from paude.hash import compute_config_hash, compute_content_hash
+from paude.platform import is_macos
 
 # Re-export for backward compatibility
 __all__ = ["BuildContext", "ImageManager", "prepare_build_context"]
@@ -272,7 +273,15 @@ class ImageManager:
         context: Path,
         build_args: dict[str, str] | None = None,
     ) -> None:
-        """Build a container image."""
+        """Build a container image.
+
+        When the engine is remote, the build context is transferred to the
+        remote host via tar pipe before building.
+        """
+        if self._engine.is_remote:
+            self._build_image_remote(dockerfile, tag, context, build_args)
+            return
+
         cmd = ["build", "-f", str(dockerfile), "-t", tag]
 
         if self.platform:
@@ -282,3 +291,81 @@ class ImageManager:
                 cmd.extend(["--build-arg", f"{key}={value}"])
         cmd.append(str(context))
         self._engine.run(*cmd, capture=False)
+
+    def _build_image_remote(
+        self,
+        dockerfile: Path,
+        tag: str,
+        context: Path,
+        build_args: dict[str, str] | None = None,
+    ) -> None:
+        """Build an image on a remote host by transferring the build context."""
+        import subprocess
+
+        from paude.transport.ssh import SshTransport
+
+        transport = self._engine.transport
+        if not isinstance(transport, SshTransport):
+            raise RuntimeError("Remote build requires SshTransport")
+
+        # Create temp dir on remote for the build context
+        result = transport.run(
+            ["mktemp", "-d", "/tmp/paude-build-XXXX"],  # noqa: S108
+            check=True,
+        )
+        remote_dir = result.stdout.strip()
+
+        try:
+            # Transfer build context via tar pipe
+            tar_cmd = ["tar"]
+            if is_macos():
+                tar_cmd.append("--no-mac-metadata")
+            tar_cmd.extend(["-cf", "-", "-C", str(context), "."])
+            untar_cmd = [
+                *transport.ssh_base(),
+                "--",
+                "tar",
+                "--warning=no-unknown-keyword",
+                "-xf",
+                "-",
+                "-C",
+                remote_dir,
+            ]
+            tar_proc = subprocess.Popen(tar_cmd, stdout=subprocess.PIPE)
+            try:
+                untar_proc = subprocess.Popen(untar_cmd, stdin=tar_proc.stdout)
+                if tar_proc.stdout:
+                    tar_proc.stdout.close()
+                untar_proc.wait()
+            finally:
+                tar_proc.wait()
+
+            if untar_proc.returncode != 0:
+                raise RuntimeError("Failed to transfer build context to remote")
+
+            # If dockerfile is inside context, use relative path on remote
+            try:
+                rel_dockerfile = dockerfile.relative_to(context)
+                remote_dockerfile = f"{remote_dir}/{rel_dockerfile}"
+            except ValueError:
+                # Dockerfile outside context — transfer it separately
+                remote_dockerfile = f"{remote_dir}/Dockerfile.paude"
+                with open(dockerfile, "rb") as f:
+                    transport.run(
+                        ["tee", remote_dockerfile],
+                        input=f.read().decode(),
+                        check=True,
+                    )
+
+            # Build on remote
+            cmd = ["build", "-f", remote_dockerfile, "-t", tag]
+            if self.platform:
+                cmd.extend(["--platform", self.platform])
+            if build_args:
+                for key, value in build_args.items():
+                    cmd.extend(["--build-arg", f"{key}={value}"])
+            cmd.append(remote_dir)
+            self._engine.run(*cmd, capture=False)
+        finally:
+            # Clean up remote temp dir
+            transport.run(["rm", "-rf", remote_dir], check=False)

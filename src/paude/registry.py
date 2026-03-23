@@ -39,6 +39,9 @@ class RegistryEntry:
     openshift_context: str | None = None
     openshift_namespace: str | None = None
     engine: str = "podman"
+    ssh_host: str | None = None
+    ssh_key: str | None = None
+    remote_config_dir: str | None = None
 
     def to_session(self, status: str = "unknown") -> Session:
         """Convert this entry to a Session object."""
@@ -102,6 +105,9 @@ class SessionRegistry:
         session: Session,
         openshift_context: str | None = None,
         openshift_namespace: str | None = None,
+        ssh_host: str | None = None,
+        ssh_key: str | None = None,
+        remote_config_dir: str | None = None,
     ) -> None:
         """Add or update a session in the registry."""
         from paude.backends.shared import is_local_backend
@@ -120,6 +126,9 @@ class SessionRegistry:
             openshift_context=openshift_context,
             openshift_namespace=openshift_namespace,
             engine=engine,
+            ssh_host=ssh_host,
+            ssh_key=ssh_key,
+            remote_config_dir=remote_config_dir,
         )
         self._save(entries)
 

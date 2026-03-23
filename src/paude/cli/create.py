@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated
+
+if TYPE_CHECKING:
+    from paude.transport.base import Transport
 
 import typer
 
@@ -159,6 +163,20 @@ def session_create(
             help="Skip cloning from origin in container (force full push).",
         ),
     ] = False,
+    host: Annotated[
+        str | None,
+        typer.Option(
+            "--host",
+            help="Remote host for container execution (user@hostname[:port]).",
+        ),
+    ] = None,
+    ssh_key: Annotated[
+        str | None,
+        typer.Option(
+            "--ssh-key",
+            help="SSH private key path for remote host.",
+        ),
+    ] = None,
 ) -> None:
     """Create a new persistent session (does not start it)."""
     from paude.config import detect_config, parse_config
@@ -244,6 +262,41 @@ def session_create(
         )
         raise typer.Exit()
 
+    # Validate --host
+    if host and r_backend == BackendType.openshift:
+        typer.echo(
+            "Error: --host is not supported with --backend openshift.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    if ssh_key and not host:
+        typer.echo(
+            "Error: --ssh-key requires --host.",
+            err=True,
+        )
+        raise typer.Exit(1)
+
+    # Build SSH transport if --host is specified
+    ssh_transport = None
+    parsed_ssh_host: str | None = None
+    ssh_port: int | None = None
+    if host:
+        from paude.transport.ssh import SshTransport, parse_ssh_host
+
+        parsed_ssh_host, ssh_port = parse_ssh_host(host)
+        ssh_transport = SshTransport(parsed_ssh_host, key=ssh_key, port=ssh_port)
+        try:
+            typer.echo(
+                f"Validating SSH connection to {parsed_ssh_host}...",
+                err=True,
+            )
+            ssh_transport.validate()
+            ssh_transport.validate_engine(r_backend.value)
+        except RuntimeError as e:
+            typer.echo(f"Error: {e}", err=True)
+            raise typer.Exit(1) from None
+
     # Shared pre-create: parse args, build env, expand domains, show warnings
     expanded_domains, parsed_args, env, unrestricted = _prepare_session_create(
         allowed_domains=r_allowed_domains,
@@ -269,6 +322,9 @@ def session_create(
             platform=r_platform,
             agent_name=r_agent,
             engine_binary=r_backend.value,
+            ssh_host=parsed_ssh_host,
+            ssh_key=ssh_key,
+            transport=ssh_transport,
         )
     else:
         _create_openshift_session(
@@ -308,13 +364,16 @@ def _create_podman_session(
     platform: str | None,
     agent_name: str = "claude",
     engine_binary: str = "podman",
+    ssh_host: str | None = None,
+    ssh_key: str | None = None,
+    transport: Transport | None = None,
 ) -> None:
     """Local container session creation logic (Podman or Docker)."""
     from paude.container import ImageManager
     from paude.container.engine import ContainerEngine
     from paude.mounts import build_mounts
 
-    engine = ContainerEngine(engine_binary)
+    engine = ContainerEngine(engine_binary, transport=transport)
     home = Path.home()
     agent_instance = get_agent(agent_name)
     image_manager = ImageManager(
@@ -339,6 +398,17 @@ def _create_podman_session(
 
     # Build mounts
     mounts = build_mounts(home, agent_instance)
+
+    # Sync configs to remote host if using SSH
+    remote_config_paths = None
+    if engine.is_remote:
+        from paude.transport.config_sync import remap_mounts, sync_configs_to_remote
+        from paude.transport.ssh import SshTransport
+
+        if isinstance(engine.transport, SshTransport):
+            typer.echo("Syncing configuration to remote host...", err=True)
+            remote_config_paths = sync_configs_to_remote(engine.transport, mounts)
+            mounts = remap_mounts(mounts, remote_config_paths.path_map)
 
     # Ensure proxy image when domain filtering is active
     podman_proxy_image: str | None = None
@@ -375,10 +445,23 @@ def _create_podman_session(
         raise typer.Exit(1) from None
     except Exception as e:
         typer.echo(f"Error creating session: {e}", err=True)
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            typer.echo(e.stderr.strip(), err=True)
         try:
             backend_instance.delete_session(session.name, confirm=True)
         except Exception:  # noqa: S110 - best-effort cleanup
             pass
+        if remote_config_paths:
+            try:
+                from paude.transport.config_sync import cleanup_remote_configs
+                from paude.transport.ssh import SshTransport
+
+                if isinstance(engine.transport, SshTransport):
+                    cleanup_remote_configs(
+                        engine.transport, remote_config_paths.remote_base
+                    )
+            except Exception:  # noqa: S110 - best-effort cleanup
+                pass
         raise typer.Exit(1) from None
 
     _finalize_session_create(
@@ -387,6 +470,11 @@ def _create_podman_session(
         yolo=yolo,
         git=git,
         no_clone_origin=no_clone_origin,
+        ssh_host=ssh_host,
+        ssh_key=ssh_key,
+        remote_config_dir=(
+            remote_config_paths.remote_base if remote_config_paths else None
+        ),
     )
 
 
@@ -480,6 +568,8 @@ def _create_openshift_session(
         raise typer.Exit(1) from None
     except Exception as e:
         typer.echo(f"Error creating session: {e}", err=True)
+        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
+            typer.echo(e.stderr.strip(), err=True)
         try:
             os_backend.delete_session(session_name, confirm=True)
         except Exception:  # noqa: S110 - best-effort cleanup

@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import subprocess
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from paude.transport.base import Transport
 
 
 class ContainerEngine:
@@ -10,16 +14,30 @@ class ContainerEngine:
 
     Wraps subprocess calls with the configured binary name and provides
     compatibility shims for commands that differ between engines.
+
+    When a ``Transport`` is provided, all commands are routed through it,
+    enabling transparent remote execution over SSH.
     """
 
-    def __init__(self, engine: str = "podman") -> None:
+    def __init__(
+        self,
+        engine: str = "podman",
+        transport: Transport | None = None,
+    ) -> None:
         self.binary = engine
+        if transport is None:
+            from paude.transport.local import LocalTransport
+
+            transport = LocalTransport()
+        self._transport = transport
 
     def run(
         self,
         *args: str,
         check: bool = True,
         capture: bool = True,
+        input: str | None = None,  # noqa: A002
+        timeout: int | None = None,
     ) -> subprocess.CompletedProcess[str]:
         """Run a container engine command.
 
@@ -27,17 +45,44 @@ class ContainerEngine:
             *args: Arguments to pass to the engine binary.
             check: Raise on non-zero exit code.
             capture: Capture stdout/stderr.
+            input: String to send to stdin.
+            timeout: Timeout in seconds.
 
         Returns:
             CompletedProcess result.
         """
         cmd = [self.binary, *args]
-        return subprocess.run(
+        return self._transport.run(
             cmd,
             check=check,
-            capture_output=capture,
-            text=True,
+            capture=capture,
+            input=input,
+            timeout=timeout,
         )
+
+    def run_interactive(self, *args: str) -> int:
+        """Run an interactive container engine command (with TTY).
+
+        Returns:
+            Exit code from the command.
+        """
+        cmd = [self.binary, *args]
+        return self._transport.run_interactive(cmd)
+
+    @property
+    def is_remote(self) -> bool:
+        """Whether commands are executed on a remote host."""
+        return self._transport.is_remote
+
+    @property
+    def host_label(self) -> str:
+        """Human-readable label for the execution host."""
+        return self._transport.host_label
+
+    @property
+    def transport(self) -> Transport:
+        """Access the underlying transport."""
+        return self._transport
 
     def image_exists(self, tag: str) -> bool:
         """Check if a container image exists locally.

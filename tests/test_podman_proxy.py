@@ -4,25 +4,29 @@ from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
 
-from paude.backends.podman.proxy import PodmanProxyManager
+from paude.backends.podman.proxy import PodmanProxyManager, _get_host_dns
 
 
-def _make_mock_runner() -> MagicMock:
+def _make_mock_runner(engine_binary: str = "podman") -> MagicMock:
     """Create a mock ContainerRunner with a proper engine."""
     mock_runner = MagicMock()
-    mock_runner.engine.binary = "podman"
-    mock_runner.engine.supports_multi_network_create = True
-    mock_runner.engine.default_bridge_network = "podman"
+    mock_runner.engine.binary = engine_binary
+    mock_runner.engine.is_remote = False
+    mock_runner.engine.supports_multi_network_create = engine_binary != "docker"
+    mock_runner.engine.default_bridge_network = (
+        "podman" if engine_binary == "podman" else "bridge"
+    )
     mock_runner.engine.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
     return mock_runner
 
 
 class TestPodmanProxyManagerDnsLogging:
-    """Tests for DNS logging in PodmanProxyManager."""
+    """Tests for DNS logging in PodmanProxyManager (local Podman on macOS)."""
 
+    @patch("paude.backends.podman.proxy.is_macos", return_value=True)
     @patch("paude.backends.podman.proxy.get_podman_machine_dns")
     def test_create_proxy_logs_dns_when_available(
-        self, mock_dns: MagicMock, capsys
+        self, mock_dns: MagicMock, mock_macos: MagicMock, capsys
     ) -> None:
         """create_proxy logs the DNS IP when extraction succeeds."""
         mock_dns.return_value = "192.168.127.1"
@@ -40,9 +44,10 @@ class TestPodmanProxyManagerDnsLogging:
         captured = capsys.readouterr()
         assert "Using Podman VM DNS: 192.168.127.1" in captured.err
 
+    @patch("paude.backends.podman.proxy.is_macos", return_value=True)
     @patch("paude.backends.podman.proxy.get_podman_machine_dns")
     def test_create_proxy_no_dns_log_when_none(
-        self, mock_dns: MagicMock, capsys
+        self, mock_dns: MagicMock, mock_macos: MagicMock, capsys
     ) -> None:
         """create_proxy does not log DNS when extraction returns None."""
         mock_dns.return_value = None
@@ -60,9 +65,10 @@ class TestPodmanProxyManagerDnsLogging:
         captured = capsys.readouterr()
         assert "Using Podman VM DNS" not in captured.err
 
+    @patch("paude.backends.podman.proxy.is_macos", return_value=True)
     @patch("paude.backends.podman.proxy.get_podman_machine_dns")
     def test_update_domains_logs_dns_when_available(
-        self, mock_dns: MagicMock, capsys
+        self, mock_dns: MagicMock, mock_macos: MagicMock, capsys
     ) -> None:
         """update_domains logs the DNS IP when extraction succeeds."""
         mock_dns.return_value = "10.0.2.3"
@@ -80,9 +86,10 @@ class TestPodmanProxyManagerDnsLogging:
         captured = capsys.readouterr()
         assert "Using Podman VM DNS: 10.0.2.3" in captured.err
 
+    @patch("paude.backends.podman.proxy.is_macos", return_value=True)
     @patch("paude.backends.podman.proxy.get_podman_machine_dns")
     def test_start_if_needed_logs_dns_on_recreate(
-        self, mock_dns: MagicMock, capsys
+        self, mock_dns: MagicMock, mock_macos: MagicMock, capsys
     ) -> None:
         """start_if_needed logs DNS when recreating a missing proxy."""
         mock_dns.return_value = "192.168.127.1"
@@ -107,3 +114,118 @@ class TestPodmanProxyManagerDnsLogging:
 
         captured = capsys.readouterr()
         assert "Using Podman VM DNS: 192.168.127.1" in captured.err
+
+
+class TestGetHostDns:
+    """Tests for _get_host_dns across engine/platform combinations."""
+
+    def test_docker_reads_resolv_conf_via_transport(self, capsys) -> None:
+        """Docker engine reads DNS from host resolv.conf via transport."""
+        engine = MagicMock()
+        engine.binary = "docker"
+        engine.transport.run.return_value = MagicMock(
+            returncode=0, stdout="nameserver 10.0.0.1\nnameserver 8.8.8.8\n"
+        )
+
+        result = _get_host_dns(engine)
+
+        assert result == "10.0.0.1"
+        engine.transport.run.assert_called_once_with(
+            ["grep", "nameserver", "/etc/resolv.conf"], check=False
+        )
+        captured = capsys.readouterr()
+        assert "Using host DNS: 10.0.0.1" in captured.err
+
+    def test_docker_skips_loopback_dns(self, capsys) -> None:
+        """Docker engine skips 127.x.x.x nameservers (e.g. systemd-resolved)."""
+        engine = MagicMock()
+        engine.binary = "docker"
+        engine.transport.run.return_value = MagicMock(
+            returncode=0,
+            stdout="nameserver 127.0.0.53\nnameserver 10.0.0.1\n",
+        )
+
+        result = _get_host_dns(engine)
+
+        assert result == "10.0.0.1"
+
+    def test_docker_returns_none_when_only_loopback(self) -> None:
+        """Returns None when all nameservers are loopback."""
+        engine = MagicMock()
+        engine.binary = "docker"
+        engine.transport.run.return_value = MagicMock(
+            returncode=0, stdout="nameserver 127.0.0.53\n"
+        )
+
+        result = _get_host_dns(engine)
+
+        assert result is None
+
+    def test_docker_returns_none_on_failure(self) -> None:
+        """Returns None when resolv.conf read fails."""
+        engine = MagicMock()
+        engine.binary = "docker"
+        engine.transport.run.return_value = MagicMock(returncode=1, stdout="")
+
+        result = _get_host_dns(engine)
+
+        assert result is None
+
+    def test_docker_returns_none_on_exception(self) -> None:
+        """Returns None when transport raises an exception."""
+        engine = MagicMock()
+        engine.binary = "docker"
+        engine.transport.run.side_effect = Exception("SSH connection failed")
+
+        result = _get_host_dns(engine)
+
+        assert result is None
+
+    @patch("paude.backends.podman.proxy.is_macos", return_value=True)
+    @patch("paude.backends.podman.proxy.get_podman_machine_dns")
+    def test_local_podman_macos_uses_vm_dns(
+        self, mock_dns: MagicMock, mock_macos: MagicMock
+    ) -> None:
+        """Local Podman on macOS uses get_podman_machine_dns."""
+        mock_dns.return_value = "192.168.127.1"
+        engine = MagicMock()
+        engine.binary = "podman"
+        engine.is_remote = False
+
+        result = _get_host_dns(engine)
+
+        assert result == "192.168.127.1"
+        engine.transport.run.assert_not_called()
+
+    @patch("paude.backends.podman.proxy.is_macos", return_value=False)
+    def test_local_podman_linux_reads_resolv_conf(
+        self, mock_macos: MagicMock, capsys
+    ) -> None:
+        """Local Podman on Linux reads DNS from resolv.conf."""
+        engine = MagicMock()
+        engine.binary = "podman"
+        engine.is_remote = False
+        engine.transport.run.return_value = MagicMock(
+            returncode=0, stdout="nameserver 10.0.0.1\n"
+        )
+
+        result = _get_host_dns(engine)
+
+        assert result == "10.0.0.1"
+        engine.transport.run.assert_called_once()
+        captured = capsys.readouterr()
+        assert "Using host DNS: 10.0.0.1" in captured.err
+
+    def test_remote_podman_reads_resolv_conf(self, capsys) -> None:
+        """Remote Podman reads DNS from remote host's resolv.conf."""
+        engine = MagicMock()
+        engine.binary = "podman"
+        engine.is_remote = True
+        engine.transport.run.return_value = MagicMock(
+            returncode=0, stdout="nameserver 172.16.0.1\n"
+        )
+
+        result = _get_host_dns(engine)
+
+        assert result == "172.16.0.1"
+        engine.transport.run.assert_called_once()

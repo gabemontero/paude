@@ -339,6 +339,69 @@ def test_create_does_not_accept_github_token():
     assert "No such option" in result.output or "Error" in result.output
 
 
+class TestCreateHostFlag:
+    """Tests for --host and --ssh-key CLI flags."""
+
+    def test_host_flag_recognized(self):
+        """--host flag is accepted by the create command."""
+        result = runner.invoke(app, ["create", "--help"])
+        assert "--host" in result.stdout
+
+    def test_ssh_key_flag_recognized(self):
+        """--ssh-key flag is accepted by the create command."""
+        result = runner.invoke(app, ["create", "--help"])
+        assert "--ssh-key" in result.stdout
+
+    def test_host_with_openshift_rejected(self):
+        """--host is not supported with --backend openshift."""
+        result = runner.invoke(
+            app, ["create", "--backend=openshift", "--host", "user@host"]
+        )
+        output = result.stdout + (result.stderr or "")
+        assert result.exit_code == 1
+        assert "--host is not supported with --backend openshift" in output
+
+    def test_ssh_key_without_host_rejected(self):
+        """--ssh-key requires --host."""
+        result = runner.invoke(app, ["create", "--ssh-key", "/path/to/key"])
+        output = result.stdout + (result.stderr or "")
+        assert result.exit_code == 1
+        assert "--ssh-key requires --host" in output
+
+    @patch("paude.transport.ssh.SshTransport")
+    def test_host_validates_ssh_connection(self, mock_ssh_class):
+        """--host validates SSH connectivity before proceeding."""
+        mock_transport = MagicMock()
+        mock_transport.validate.side_effect = RuntimeError(
+            "SSH connection to badhost failed"
+        )
+        mock_ssh_class.return_value = mock_transport
+
+        result = runner.invoke(
+            app, ["create", "--backend=docker", "--host", "user@badhost"]
+        )
+        output = result.stdout + (result.stderr or "")
+        assert result.exit_code == 1
+        assert "SSH connection to badhost failed" in output
+
+    @patch("paude.transport.ssh.SshTransport")
+    def test_host_validates_engine_on_remote(self, mock_ssh_class):
+        """--host validates that the engine binary exists on the remote."""
+        mock_transport = MagicMock()
+        mock_transport.validate.return_value = None
+        mock_transport.validate_engine.side_effect = RuntimeError(
+            "'docker' not found on user@host"
+        )
+        mock_ssh_class.return_value = mock_transport
+
+        result = runner.invoke(
+            app, ["create", "--backend=docker", "--host", "user@host"]
+        )
+        output = result.stdout + (result.stderr or "")
+        assert result.exit_code == 1
+        assert "'docker' not found on user@host" in output
+
+
 def test_bare_paude_shows_list():
     """Bare 'paude' command shows session list with helpful hints."""
     result = runner.invoke(app, [])
@@ -585,7 +648,7 @@ class TestRemoteCommand:
         assert "Pushing main to container" in output
         assert "Push complete" in output
         mock_init.assert_called_once_with(
-            "paude-test-session", branch="main", engine="podman"
+            "paude-test-session", branch="main", engine="podman", transport=None
         )
         mock_push.assert_called_once_with("paude-test-session", "main")
 
@@ -629,7 +692,7 @@ class TestRemoteCommand:
         output = result.stdout + (result.stderr or "")
         assert "Initializing git repository in container" in output
         mock_init.assert_called_once_with(
-            "paude-test-session", branch="main", engine="podman"
+            "paude-test-session", branch="main", engine="podman", transport=None
         )
 
 

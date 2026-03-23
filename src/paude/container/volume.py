@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from typing import Any
 
 from paude.container.engine import ContainerEngine
@@ -21,28 +20,23 @@ class VolumeManager:
         Returns:
             Volume name.
         """
-        cmd = [self._engine.binary, "volume", "create"]
+        args = ["volume", "create"]
         if labels:
             for key, value in labels.items():
-                cmd.extend(["--label", f"{key}={value}"])
-        cmd.append(name)
+                args.extend(["--label", f"{key}={value}"])
+        args.append(name)
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise subprocess.CalledProcessError(
-                result.returncode, cmd, result.stdout, result.stderr
-            )
-
+        result = self._engine.run(*args)
         return result.stdout.strip()
 
     def remove_volume(self, name: str, force: bool = False) -> None:
         """Remove a named volume."""
-        cmd = [self._engine.binary, "volume", "rm"]
+        args = ["volume", "rm"]
         if force:
-            cmd.append("-f")
-        cmd.append(name)
+            args.append("-f")
+        args.append(name)
 
-        subprocess.run(cmd, capture_output=True)
+        self._engine.run(*args, check=False)
 
     def volume_exists(self, name: str) -> bool:
         """Check if a volume exists."""
@@ -50,10 +44,8 @@ class VolumeManager:
 
     def get_volume_labels(self, name: str) -> dict[str, str]:
         """Get labels from a volume."""
-        result = subprocess.run(
-            [self._engine.binary, "volume", "inspect", "-f", "{{json .Labels}}", name],
-            capture_output=True,
-            text=True,
+        result = self._engine.run(
+            "volume", "inspect", "-f", "{{json .Labels}}", name, check=False
         )
         if result.returncode != 0:
             return {}
@@ -69,11 +61,11 @@ class VolumeManager:
         label_filter: str | None = None,
     ) -> list[dict[str, Any]]:
         """List volumes with optional label filter."""
-        cmd = [self._engine.binary, "volume", "ls", "--format", "json"]
+        args = ["volume", "ls", "--format", "json"]
         if label_filter:
-            cmd.extend(["--filter", f"label={label_filter}"])
+            args.extend(["--filter", f"label={label_filter}"])
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self._engine.run(*args, check=False)
         if result.returncode != 0:
             return []
 

@@ -12,7 +12,7 @@ import pytest
 class TestImageExists:
     """Tests for image_exists."""
 
-    @patch("paude.container.engine.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_returns_true_for_existing_image(self, mock_run):
         """image_exists returns True for existing image."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -26,7 +26,7 @@ class TestImageExists:
         result = image_exists("test:tag")
         assert result is True
 
-    @patch("paude.container.engine.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_returns_false_for_missing_image(self, mock_run):
         """image_exists returns False for missing image."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -532,7 +532,7 @@ class TestContainerRunner:
         with pytest.raises(ProxyStartError, match="container name already in use"):
             proxy.run_proxy("test:proxy", "test-network")
 
-    @patch("paude.container.runner.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_stop_container_uses_stop_with_short_timeout(self, mock_run):
         """stop_container uses podman stop with short timeout for graceful exit."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -549,7 +549,7 @@ class TestContainerRunner:
         assert "1" in call_args
         assert "test-container" in call_args
 
-    @patch("paude.container.runner.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_create_secret_succeeds_on_clean_install(self, mock_run):
         """create_secret works on clean install (no prior secret)."""
         mock_run.return_value = MagicMock(returncode=0)
@@ -559,13 +559,17 @@ class TestContainerRunner:
         runner.create_secret("my-secret", Path("/tmp/creds.json"))
 
         # Only one call needed when secret doesn't already exist
-        mock_run.assert_called_once_with(
-            ["podman", "secret", "create", "my-secret", "/tmp/creds.json"],
-            capture_output=True,
-            check=True,
-        )
+        mock_run.assert_called_once()
+        call_args = mock_run.call_args[0][0]
+        assert call_args == [
+            "podman",
+            "secret",
+            "create",
+            "my-secret",
+            "/tmp/creds.json",
+        ]
 
-    @patch("paude.container.runner.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_create_secret_replaces_existing_secret(self, mock_run):
         """create_secret removes and retries when secret already exists."""
         mock_run.side_effect = [
@@ -602,6 +606,29 @@ class TestContainerRunner:
             "my-secret",
             "/tmp/creds.json",
         ]
+
+    @patch("paude.transport.local.subprocess.run")
+    def test_create_container_error_includes_stderr(self, mock_run):
+        """create_container raises CalledProcessError with stderr from engine."""
+        mock_run.return_value = MagicMock(
+            returncode=1,
+            stdout="",
+            stderr="Error: network not found: bad-net",
+        )
+        from paude.container.runner import ContainerRunner
+
+        runner = ContainerRunner()
+        with pytest.raises(subprocess.CalledProcessError) as exc_info:
+            runner.create_container(
+                name="test-container",
+                image="test-image:latest",
+                mounts=[],
+                env={},
+                workdir="/pvc",
+                network="bad-net",
+            )
+        assert exc_info.value.stderr == "Error: network not found: bad-net"
+        assert exc_info.value.returncode == 1
 
 
 class TestNetworkManager:
@@ -739,71 +766,73 @@ class TestProxyDockerfileCopyFiles:
 class TestVolumeManager:
     """Tests for VolumeManager."""
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_create_volume_calls_podman(self, mock_run):
-        """create_volume calls podman volume create with correct args."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=["podman", "volume", "create", "test-vol"],
-            returncode=0,
-            stdout="test-vol\n",
-            stderr="",
-        )
+    def test_create_volume_calls_engine(self):
+        """create_volume calls engine with correct args."""
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        result = manager.create_volume("test-vol")
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="test-vol\n")
+            manager = VolumeManager(engine)
+            result = manager.create_volume("test-vol")
 
-        mock_run.assert_called_once()
-        call_args = mock_run.call_args[0][0]
-        assert call_args == ["podman", "volume", "create", "test-vol"]
-        assert result == "test-vol"
+            mock_run.assert_called_once()
+            call_args = mock_run.call_args[0]
+            assert "volume" in call_args
+            assert "create" in call_args
+            assert "test-vol" in call_args
+            assert result == "test-vol"
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_create_volume_with_labels(self, mock_run):
+    def test_create_volume_with_labels(self):
         """create_volume passes labels as --label key=value."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="test-vol\n", stderr=""
-        )
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        manager.create_volume("test-vol", labels={"app": "paude", "env": "test"})
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="test-vol\n")
+            manager = VolumeManager(engine)
+            manager.create_volume("test-vol", labels={"app": "paude", "env": "test"})
 
-        call_args = mock_run.call_args[0][0]
-        assert "--label" in call_args
-        assert "app=paude" in call_args
-        assert "env=test" in call_args
+            call_args = mock_run.call_args[0]
+            assert "--label" in call_args
+            assert "app=paude" in call_args
+            assert "env=test" in call_args
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_remove_volume_calls_podman(self, mock_run):
-        """remove_volume calls podman volume rm."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+    def test_remove_volume_calls_engine(self):
+        """remove_volume calls engine volume rm."""
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        manager.remove_volume("test-vol")
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            manager = VolumeManager(engine)
+            manager.remove_volume("test-vol")
 
-        call_args = mock_run.call_args[0][0]
-        assert call_args == ["podman", "volume", "rm", "test-vol"]
+            call_args = mock_run.call_args[0]
+            assert "volume" in call_args
+            assert "rm" in call_args
+            assert "test-vol" in call_args
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_remove_volume_with_force(self, mock_run):
+    def test_remove_volume_with_force(self):
         """remove_volume passes -f flag when force=True."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout="", stderr=""
-        )
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        manager.remove_volume("test-vol", force=True)
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0)
+            manager = VolumeManager(engine)
+            manager.remove_volume("test-vol", force=True)
 
-        call_args = mock_run.call_args[0][0]
-        assert "-f" in call_args
-        assert call_args == ["podman", "volume", "rm", "-f", "test-vol"]
+            call_args = mock_run.call_args[0]
+            assert "-f" in call_args
+            assert "volume" in call_args
+            assert "rm" in call_args
 
-    @patch("paude.container.engine.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_volume_exists_returns_true(self, mock_run):
         """volume_exists returns True when podman returns 0."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -816,7 +845,7 @@ class TestVolumeManager:
 
         assert result is True
 
-    @patch("paude.container.engine.subprocess.run")
+    @patch("paude.transport.local.subprocess.run")
     def test_volume_exists_returns_false(self, mock_run):
         """volume_exists returns False when podman returns non-zero."""
         mock_run.return_value = subprocess.CompletedProcess(
@@ -829,61 +858,63 @@ class TestVolumeManager:
 
         assert result is False
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_get_volume_labels_returns_parsed_json(self, mock_run):
+    def test_get_volume_labels_returns_parsed_json(self):
         """get_volume_labels returns parsed JSON labels."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[],
-            returncode=0,
-            stdout='{"app": "paude", "workspace": "/test"}',
-            stderr="",
-        )
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        result = manager.get_volume_labels("test-vol")
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0,
+                stdout='{"app": "paude", "workspace": "/test"}',
+            )
+            manager = VolumeManager(engine)
+            result = manager.get_volume_labels("test-vol")
 
         assert result == {"app": "paude", "workspace": "/test"}
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_get_volume_labels_returns_empty_on_error(self, mock_run):
+    def test_get_volume_labels_returns_empty_on_error(self):
         """get_volume_labels returns empty dict on error."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="no such volume"
-        )
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        result = manager.get_volume_labels("nonexistent-vol")
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=1, stdout="", stderr="no such volume"
+            )
+            manager = VolumeManager(engine)
+            result = manager.get_volume_labels("nonexistent-vol")
 
         assert result == {}
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_list_volumes_returns_parsed_json(self, mock_run):
+    def test_list_volumes_returns_parsed_json(self):
         """list_volumes returns parsed JSON list."""
-        volumes_json = '[{"Name": "vol1"}, {"Name": "vol2"}]'
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=0, stdout=volumes_json, stderr=""
-        )
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        result = manager.list_volumes(label_filter="app=paude")
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            volumes_json = '[{"Name": "vol1"}, {"Name": "vol2"}]'
+            mock_run.return_value = MagicMock(returncode=0, stdout=volumes_json)
+            manager = VolumeManager(engine)
+            result = manager.list_volumes(label_filter="app=paude")
 
         assert result == [{"Name": "vol1"}, {"Name": "vol2"}]
-        call_args = mock_run.call_args[0][0]
+        call_args = mock_run.call_args[0]
         assert "--filter" in call_args
         assert "label=app=paude" in call_args
 
-    @patch("paude.container.volume.subprocess.run")
-    def test_list_volumes_returns_empty_on_error(self, mock_run):
+    def test_list_volumes_returns_empty_on_error(self):
         """list_volumes returns empty list on error."""
-        mock_run.return_value = subprocess.CompletedProcess(
-            args=[], returncode=1, stdout="", stderr="error"
-        )
+        from paude.container.engine import ContainerEngine
         from paude.container.volume import VolumeManager
 
-        manager = VolumeManager()
-        result = manager.list_volumes()
+        engine = ContainerEngine()
+        with patch.object(engine, "run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="error")
+            manager = VolumeManager(engine)
+            result = manager.list_volumes()
 
         assert result == []

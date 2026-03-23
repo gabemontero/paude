@@ -26,6 +26,9 @@ def find_session_backend(
 ) -> tuple[BackendType, Backend] | None:
     """Find which backend contains the given session.
 
+    Checks the local registry first for SSH sessions, then probes
+    local and OpenShift backends.
+
     Args:
         session_name: Name of the session to find.
         openshift_context: Optional OpenShift context.
@@ -35,6 +38,16 @@ def find_session_backend(
         Tuple of (backend_type, backend_instance) if found, None otherwise.
         The backend_instance is either PodmanBackend or OpenShiftBackend.
     """
+    # Check registry for SSH sessions first
+    from paude.registry import SessionRegistry
+
+    entry = SessionRegistry().get(session_name)
+    if entry and entry.ssh_host:
+        backend = _build_ssh_backend(entry)
+        if backend is not None:
+            bt = BackendType(entry.engine)
+            return (bt, backend)
+
     # Try Podman first
     try:
         podman = PodmanBackend()
@@ -63,10 +76,19 @@ def find_session_backend(
     return None
 
 
+def _build_ssh_backend(entry: object) -> PodmanBackend | None:
+    """Reconstruct a PodmanBackend with SSH transport from a registry entry."""
+    from paude.backends.shared import build_ssh_backend
+
+    return build_ssh_backend(entry)
+
+
 def _get_backend_instance(
     backend: BackendType,
     openshift_context: str | None = None,
     openshift_namespace: str | None = None,
+    ssh_host: str | None = None,
+    ssh_key: str | None = None,
 ) -> Backend:
     """Create a backend instance based on the backend type.
 
@@ -74,14 +96,21 @@ def _get_backend_instance(
         backend: The backend type to create.
         openshift_context: Optional OpenShift context.
         openshift_namespace: Optional OpenShift namespace.
+        ssh_host: Optional SSH host for remote execution.
+        ssh_key: Optional SSH key path.
 
     Returns:
         Backend instance (PodmanBackend or OpenShiftBackend).
     """
-    if backend == BackendType.podman:
-        return PodmanBackend()
-    if backend == BackendType.docker:
-        return PodmanBackend(engine=ContainerEngine("docker"))
+    if backend in (BackendType.podman, BackendType.docker):
+        transport = None
+        if ssh_host:
+            from paude.transport.ssh import SshTransport, parse_ssh_host
+
+            host, port = parse_ssh_host(ssh_host)
+            transport = SshTransport(host, key=ssh_key, port=port)
+        engine = ContainerEngine(backend.value, transport=transport)
+        return PodmanBackend(engine=engine)
     openshift_config = OpenShiftConfig(
         context=openshift_context,
         namespace=openshift_namespace,
@@ -250,13 +279,23 @@ def _finalize_session_create(
     openshift_context: str | None = None,
     openshift_namespace: str | None = None,
     no_clone_origin: bool = False,
+    ssh_host: str | None = None,
+    ssh_key: str | None = None,
+    remote_config_dir: str | None = None,
 ) -> None:
     """Shared post-create output and git setup."""
     from paude.cli.remote import _setup_git_after_create
     from paude.domains import format_domains_for_display
     from paude.registry import SessionRegistry
 
-    SessionRegistry().register(session, openshift_context, openshift_namespace)
+    SessionRegistry().register(
+        session,
+        openshift_context,
+        openshift_namespace,
+        ssh_host=ssh_host,
+        ssh_key=ssh_key,
+        remote_config_dir=remote_config_dir,
+    )
 
     from paude.backends.shared import is_local_backend
 
@@ -275,6 +314,8 @@ def _finalize_session_create(
             openshift_context=openshift_context,
             openshift_namespace=openshift_namespace,
             no_clone_origin=no_clone_origin,
+            ssh_host=ssh_host,
+            ssh_key=ssh_key,
         )
 
     typer.echo("")

@@ -41,18 +41,10 @@ class ContainerRunner:
             return
 
         try:
-            subprocess.run(
-                [self._engine.binary, "secret", "create", name, str(source_file)],
-                capture_output=True,
-                check=True,
-            )
+            self._engine.run("secret", "create", name, str(source_file))
         except subprocess.CalledProcessError:
             self.remove_secret(name)
-            subprocess.run(
-                [self._engine.binary, "secret", "create", name, str(source_file)],
-                capture_output=True,
-                check=True,
-            )
+            self._engine.run("secret", "create", name, str(source_file))
 
     def remove_secret(self, name: str) -> None:
         """Remove a container secret, ignoring errors.
@@ -62,10 +54,7 @@ class ContainerRunner:
         if not self._engine.supports_secrets:
             return
 
-        subprocess.run(
-            [self._engine.binary, "secret", "rm", name],
-            capture_output=True,
-        )
+        self._engine.run("secret", "rm", name, check=False)
 
     def create_container(
         self,
@@ -85,8 +74,7 @@ class ContainerRunner:
         Returns:
             Container ID.
         """
-        cmd = [
-            self._engine.binary,
+        args: list[str] = [
             "create",
             "--name",
             name,
@@ -98,31 +86,32 @@ class ContainerRunner:
         ]
 
         if network:
-            cmd.extend(["--network", network])
+            args.extend(["--network", network])
 
         if secrets:
             for secret in secrets:
-                cmd.extend(["--secret", secret])
+                args.extend(["--secret", secret])
 
-        cmd.extend(mounts)
+        args.extend(mounts)
 
         for key, value in env.items():
-            cmd.extend(["-e", f"{key}={value}"])
+            args.extend(["-e", f"{key}={value}"])
 
         if labels:
             for key, value in labels.items():
-                cmd.extend(["--label", f"{key}={value}"])
+                args.extend(["--label", f"{key}={value}"])
 
         if entrypoint:
-            cmd.extend(["--entrypoint", entrypoint])
+            args.extend(["--entrypoint", entrypoint])
 
-        cmd.append(image)
+        args.append(image)
 
         if command:
-            cmd.extend(command)
+            args.extend(command)
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self._engine.run(*args, check=False)
         if result.returncode != 0:
+            cmd = [self._engine.binary, *args]
             raise subprocess.CalledProcessError(
                 result.returncode, cmd, result.stdout, result.stderr
             )
@@ -135,11 +124,7 @@ class ContainerRunner:
         Raises:
             ContainerNotFoundError: If container doesn't exist.
         """
-        result = subprocess.run(
-            [self._engine.binary, "start", name],
-            capture_output=True,
-            text=True,
-        )
+        result = self._engine.run("start", name, check=False)
         if result.returncode != 0:
             if "no such container" in result.stderr.lower():
                 raise ContainerNotFoundError(f"Container not found: {name}")
@@ -152,26 +137,19 @@ class ContainerRunner:
 
     def stop_container(self, name: str) -> None:
         """Stop a container gracefully with SIGTERM (1-second timeout)."""
-        subprocess.run(
-            [self._engine.binary, "stop", "-t", "1", name],
-            capture_output=True,
-        )
+        self._engine.run("stop", "-t", "1", name, check=False)
 
     def stop_container_graceful(self, name: str, timeout: int = 10) -> None:
         """Stop a container gracefully with timeout."""
-        subprocess.run(
-            [self._engine.binary, "stop", "-t", str(timeout), name],
-            capture_output=True,
-        )
+        self._engine.run("stop", "-t", str(timeout), name, check=False)
 
     def remove_container(self, name: str, force: bool = False) -> None:
         """Remove a container."""
-        cmd = [self._engine.binary, "rm"]
+        args = ["rm"]
         if force:
-            cmd.append("-f")
-        cmd.append(name)
-
-        subprocess.run(cmd, capture_output=True)
+            args.append("-f")
+        args.append(name)
+        self._engine.run(*args, check=False)
 
     def attach_container(
         self,
@@ -185,16 +163,15 @@ class ContainerRunner:
             Exit code from the attached session.
         """
         if entrypoint:
-            cmd = [self._engine.binary, "exec", "-it"]
+            args: list[str] = ["exec", "-it"]
             if extra_env:
                 for key, value in extra_env.items():
-                    cmd.extend(["-e", f"{key}={value}"])
-            cmd.extend([name, entrypoint])
+                    args.extend(["-e", f"{key}={value}"])
+            args.extend([name, entrypoint])
         else:
-            cmd = [self._engine.binary, "attach", name]
+            args = ["attach", name]
 
-        result = subprocess.run(cmd)
-        return result.returncode
+        return self._engine.run_interactive(*args)
 
     def exec_container(
         self,
@@ -208,16 +185,15 @@ class ContainerRunner:
         Returns:
             Exit code from the command.
         """
-        cmd = [self._engine.binary, "exec"]
+        args: list[str] = ["exec"]
         if interactive:
-            cmd.append("-i")
+            args.append("-i")
         if tty:
-            cmd.append("-t")
-        cmd.append(name)
-        cmd.extend(command)
+            args.append("-t")
+        args.append(name)
+        args.extend(command)
 
-        result = subprocess.run(cmd)
-        return result.returncode
+        return self._engine.run_interactive(*args)
 
     def exec_in_container(
         self,
@@ -226,13 +202,7 @@ class ContainerRunner:
         check: bool = True,
     ) -> subprocess.CompletedProcess[str]:
         """Execute a command in a running container and capture output."""
-        cmd = [self._engine.binary, "exec", name, *command]
-        return subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            check=check,
-        )
+        return self._engine.run("exec", name, *command, check=check)
 
     def inject_file(
         self,
@@ -273,19 +243,15 @@ class ContainerRunner:
 
     def container_running(self, name: str) -> bool:
         """Check if a container is running."""
-        result = subprocess.run(
-            [self._engine.binary, "inspect", "-f", "{{.State.Running}}", name],
-            capture_output=True,
-            text=True,
+        result = self._engine.run(
+            "inspect", "-f", "{{.State.Running}}", name, check=False
         )
         return result.returncode == 0 and result.stdout.strip() == "true"
 
     def get_container_state(self, name: str) -> str | None:
         """Get the state of a container."""
-        result = subprocess.run(
-            [self._engine.binary, "inspect", "-f", "{{.State.Status}}", name],
-            capture_output=True,
-            text=True,
+        result = self._engine.run(
+            "inspect", "-f", "{{.State.Status}}", name, check=False
         )
         if result.returncode != 0:
             return None
@@ -297,13 +263,13 @@ class ContainerRunner:
         all_containers: bool = True,
     ) -> list[dict[str, Any]]:
         """List containers with optional label filter."""
-        cmd = [self._engine.binary, "ps", "--format", "json"]
+        args = ["ps", "--format", "json"]
         if all_containers:
-            cmd.append("-a")
+            args.append("-a")
         if label_filter:
-            cmd.extend(["--filter", f"label={label_filter}"])
+            args.extend(["--filter", f"label={label_filter}"])
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = self._engine.run(*args, check=False)
         if result.returncode != 0:
             return []
 
@@ -343,21 +309,15 @@ class ContainerRunner:
             fmt = "{{.ImageName}}"
         else:
             fmt = "{{.Config.Image}}"
-        result = subprocess.run(
-            [self._engine.binary, "inspect", "-f", fmt, name],
-            capture_output=True,
-            text=True,
-        )
+        result = self._engine.run("inspect", "-f", fmt, name, check=False)
         if result.returncode != 0:
             return None
         return result.stdout.strip() or None
 
     def get_container_env(self, name: str, var_name: str) -> str | None:
         """Get an environment variable from a container's config."""
-        result = subprocess.run(
-            [self._engine.binary, "inspect", "-f", "{{json .Config.Env}}", name],
-            capture_output=True,
-            text=True,
+        result = self._engine.run(
+            "inspect", "-f", "{{json .Config.Env}}", name, check=False
         )
         if result.returncode != 0:
             return None
@@ -387,8 +347,7 @@ class ContainerRunner:
         Returns:
             True if successful.
         """
-        cmd = [
-            self._engine.binary,
+        args: list[str] = [
             "run",
             "--rm",
             "-w",
@@ -396,14 +355,13 @@ class ContainerRunner:
         ]
 
         if network:
-            cmd.extend(["--network", network])
+            args.extend(["--network", network])
 
-        cmd.extend(mounts)
+        args.extend(mounts)
 
         for key, value in env.items():
-            cmd.extend(["-e", f"{key}={value}"])
+            args.extend(["-e", f"{key}={value}"])
 
-        cmd.extend([image, "/bin/bash", "-c", command])
+        args.extend([image, "/bin/bash", "-c", command])
 
-        result = subprocess.run(cmd)
-        return result.returncode == 0
+        return self._engine.run_interactive(*args) == 0
