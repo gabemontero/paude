@@ -113,6 +113,10 @@ _SECTIONS: tuple[HelpSection, ...] = (
                 "paude create --host user@host --ssh-key ~/.ssh/id_ed25519",
                 "Remote host with specific SSH key",
             ),
+            (
+                "paude create --gpu all --host user@gpu-box",
+                "Pass all GPUs on remote host",
+            ),
         ),
     ),
     HelpSection(

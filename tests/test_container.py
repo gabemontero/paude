@@ -918,3 +918,125 @@ class TestVolumeManager:
             result = manager.list_volumes()
 
         assert result == []
+
+
+class TestContainerRunnerGpu:
+    """Tests for GPU passthrough in ContainerRunner.create_container."""
+
+    @patch("paude.transport.local.subprocess.run")
+    def test_docker_gpu_all(self, mock_run):
+        """Docker uses --gpus all for gpu='all'."""
+        from paude.container.engine import ContainerEngine
+        from paude.container.runner import ContainerRunner
+
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="container-id", stderr=""
+        )
+        engine = ContainerEngine("docker")
+        runner = ContainerRunner(engine)
+        runner.create_container(
+            name="test",
+            image="test:latest",
+            mounts=[],
+            env={},
+            workdir="/pvc",
+            gpu="all",
+        )
+        call_args = mock_run.call_args[0][0]
+        assert "--gpus" in call_args
+        gpus_idx = call_args.index("--gpus")
+        assert call_args[gpus_idx + 1] == "all"
+
+    @patch("paude.transport.local.subprocess.run")
+    def test_docker_gpu_specific_devices(self, mock_run):
+        """Docker uses --gpus 'device=0,1' for specific devices."""
+        from paude.container.engine import ContainerEngine
+        from paude.container.runner import ContainerRunner
+
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="container-id", stderr=""
+        )
+        engine = ContainerEngine("docker")
+        runner = ContainerRunner(engine)
+        runner.create_container(
+            name="test",
+            image="test:latest",
+            mounts=[],
+            env={},
+            workdir="/pvc",
+            gpu="device=0,1",
+        )
+        call_args = mock_run.call_args[0][0]
+        assert "--gpus" in call_args
+        gpus_idx = call_args.index("--gpus")
+        assert call_args[gpus_idx + 1] == "device=0,1"
+
+    @patch("paude.transport.local.subprocess.run")
+    def test_podman_gpu_all(self, mock_run):
+        """Podman uses --device nvidia.com/gpu=all for gpu='all'."""
+        from paude.container.engine import ContainerEngine
+        from paude.container.runner import ContainerRunner
+
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="container-id", stderr=""
+        )
+        engine = ContainerEngine("podman")
+        runner = ContainerRunner(engine)
+        runner.create_container(
+            name="test",
+            image="test:latest",
+            mounts=[],
+            env={},
+            workdir="/pvc",
+            gpu="all",
+        )
+        call_args = mock_run.call_args[0][0]
+        assert "--device" in call_args
+        device_idx = call_args.index("--device")
+        assert call_args[device_idx + 1] == "nvidia.com/gpu=all"
+
+    @patch("paude.transport.local.subprocess.run")
+    def test_podman_gpu_specific_devices(self, mock_run):
+        """Podman uses CDI syntax for specific devices."""
+        from paude.container.engine import ContainerEngine
+        from paude.container.runner import ContainerRunner
+
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="container-id", stderr=""
+        )
+        engine = ContainerEngine("podman")
+        runner = ContainerRunner(engine)
+        runner.create_container(
+            name="test",
+            image="test:latest",
+            mounts=[],
+            env={},
+            workdir="/pvc",
+            gpu="device=0,1",
+        )
+        call_args = mock_run.call_args[0][0]
+        assert "--device" in call_args
+        device_idx = call_args.index("--device")
+        assert call_args[device_idx + 1] == "nvidia.com/gpu=device=0,1"
+
+    @patch("paude.transport.local.subprocess.run")
+    def test_no_gpu_flags_when_none(self, mock_run):
+        """No GPU flags added when gpu is None."""
+        from paude.container.engine import ContainerEngine
+        from paude.container.runner import ContainerRunner
+
+        mock_run.return_value = MagicMock(
+            returncode=0, stdout="container-id", stderr=""
+        )
+        engine = ContainerEngine("docker")
+        runner = ContainerRunner(engine)
+        runner.create_container(
+            name="test",
+            image="test:latest",
+            mounts=[],
+            env={},
+            workdir="/pvc",
+        )
+        call_args = mock_run.call_args[0][0]
+        assert "--gpus" not in call_args
+        assert "--device" not in call_args

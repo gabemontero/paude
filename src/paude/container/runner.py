@@ -68,6 +68,7 @@ class ContainerRunner:
         entrypoint: str | None = None,
         command: list[str] | None = None,
         secrets: list[str] | None = None,
+        gpu: str | None = None,
     ) -> str:
         """Create a container without starting it.
 
@@ -84,6 +85,12 @@ class ContainerRunner:
             workdir,
             "-it",
         ]
+
+        if gpu:
+            if self._engine.binary == "docker":
+                args.extend(["--gpus", gpu])
+            else:  # podman - CDI syntax
+                args.extend(["--device", f"nvidia.com/gpu={gpu}"])
 
         if network:
             args.extend(["--network", network])

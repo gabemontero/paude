@@ -163,6 +163,24 @@ def session_create(
             help="Skip cloning from origin in container (force full push).",
         ),
     ] = False,
+    gpu: Annotated[
+        str | None,
+        typer.Option(
+            "--gpu",
+            help=(
+                "Pass GPU devices to the container. "
+                "Use --gpu without a value for all GPUs, "
+                "or --gpu=device=0,1 for specific devices."
+            ),
+        ),
+    ] = None,
+    no_gpu: Annotated[
+        bool,
+        typer.Option(
+            "--no-gpu",
+            help="Explicitly disable GPU passthrough (overrides user defaults).",
+        ),
+    ] = False,
     host: Annotated[
         str | None,
         typer.Option(
@@ -198,6 +216,11 @@ def session_create(
             typer.echo(f"Error parsing config: {e}", err=True)
             raise typer.Exit(1) from None
 
+    # Resolve --gpu / --no-gpu: --no-gpu disables (even if user default is set)
+    cli_gpu: str | None = gpu
+    if no_gpu:
+        cli_gpu = ""  # empty string sentinel = explicitly disabled
+
     # Resolve layered configuration
     resolved = resolve_create_options(
         cli_backend=backend.value if backend is not None else None,
@@ -209,6 +232,7 @@ def session_create(
         cli_platform=platform,
         cli_openshift_context=openshift_context,
         cli_openshift_namespace=openshift_namespace,
+        cli_gpu=cli_gpu,
         cli_allowed_domains=allowed_domains,
         project_config=config,
         user_defaults=user_defaults,
@@ -224,6 +248,8 @@ def session_create(
     r_platform = resolved.platform.value
     r_openshift_context = resolved.openshift_context.value
     r_openshift_namespace = resolved.openshift_namespace.value
+    # Empty string means explicitly disabled via --no-gpu
+    r_gpu = resolved.gpu.value or None
 
     # Use resolved domains, or fall back to ["default"] if nothing configured
     r_allowed_domains: list[str] | None = (
@@ -325,6 +351,7 @@ def session_create(
             ssh_host=parsed_ssh_host,
             ssh_key=ssh_key,
             transport=ssh_transport,
+            gpu=r_gpu,
         )
     else:
         _create_openshift_session(
@@ -345,6 +372,7 @@ def session_create(
             openshift_namespace=r_openshift_namespace,
             credential_timeout=r_credential_timeout,
             agent_name=r_agent,
+            gpu=r_gpu,
         )
 
 
@@ -367,6 +395,7 @@ def _create_podman_session(
     ssh_host: str | None = None,
     ssh_key: str | None = None,
     transport: Transport | None = None,
+    gpu: str | None = None,
 ) -> None:
     """Local container session creation logic (Podman or Docker)."""
     from paude.container import ImageManager
@@ -432,6 +461,7 @@ def _create_podman_session(
         yolo=yolo,
         proxy_image=podman_proxy_image,
         agent=agent_name,
+        gpu=gpu,
     )
 
     try:
@@ -497,6 +527,7 @@ def _create_openshift_session(
     openshift_namespace: str | None,
     credential_timeout: int,
     agent_name: str = "claude",
+    gpu: str | None = None,
 ) -> None:
     """OpenShift-specific session creation logic."""
     from paude.backends.openshift import _generate_session_name
@@ -557,6 +588,7 @@ def _create_openshift_session(
             proxy_image=proxy_image,
             credential_timeout=credential_timeout,
             agent=agent_name,
+            gpu=gpu,
         )
 
         session = os_backend.create_session(session_config)

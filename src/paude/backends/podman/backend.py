@@ -239,6 +239,7 @@ class PodmanBackend:
                 command=["infinity"],
                 secrets=secrets,
                 network=network,
+                gpu=config.gpu,
             )
         except Exception:
             # Cleanup all resources on failure

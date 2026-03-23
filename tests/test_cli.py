@@ -98,6 +98,27 @@ def test_dry_run_shows_flag_states():
     assert "allowed-domains: unrestricted" in result.stdout
 
 
+def test_dry_run_shows_gpu():
+    """--dry-run shows gpu when --gpu is specified."""
+    result = runner.invoke(app, ["create", "--gpu", "all", "--dry-run"])
+    assert result.exit_code == 0
+    assert "gpu: all" in result.stdout
+
+
+def test_dry_run_gpu_device_spec():
+    """--dry-run shows gpu device spec."""
+    result = runner.invoke(app, ["create", "--gpu", "device=0,1", "--dry-run"])
+    assert result.exit_code == 0
+    assert "gpu: device=0,1" in result.stdout
+
+
+def test_dry_run_no_gpu_hides_gpu():
+    """--dry-run does not show gpu when --no-gpu is specified."""
+    result = runner.invoke(app, ["create", "--no-gpu", "--dry-run"])
+    assert result.exit_code == 0
+    assert "gpu:" not in result.stdout
+
+
 @pytest.mark.parametrize(
     ("flag", "name"),
     [
