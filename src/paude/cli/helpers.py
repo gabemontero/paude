@@ -109,7 +109,7 @@ def _auto_select_session(
     if workspace_match:
         return workspace_match
 
-    all_sessions = collect_all_sessions(
+    all_sessions, _reachable = collect_all_sessions(
         openshift_context, openshift_namespace, status_filter=status_filter
     )
     if not all_sessions:
@@ -243,6 +243,9 @@ def _finalize_session_create(
     """Shared post-create output and git setup."""
     from paude.cli.remote import _setup_git_after_create
     from paude.domains import format_domains_for_display
+    from paude.registry import SessionRegistry
+
+    SessionRegistry().register(session, openshift_context, openshift_namespace)
 
     bt = session.backend_type
     status_msg = "created and running" if bt == "podman" else "created"

@@ -242,12 +242,14 @@ class TestHarvestSession:
 class TestStatusSessions:
     """Tests for status_sessions."""
 
+    @patch("paude.registry.SessionRegistry.load", return_value={})
     @patch("paude.session_status.get_session_enrichment")
     @patch("paude.session_discovery.collect_all_sessions")
     def test_shows_sessions_with_git_summary(
         self,
         mock_collect: MagicMock,
         mock_enrichment: MagicMock,
+        mock_registry_load: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         from paude.backends.base import Session
@@ -261,7 +263,7 @@ class TestStatusSessions:
             backend_type="podman",
         )
         mock_backend = MagicMock()
-        mock_collect.return_value = [(mock_session, mock_backend)]
+        mock_collect.return_value = ([(mock_session, mock_backend)], {"podman"})
         mock_enrichment.return_value = (
             SessionActivity(
                 last_activity="2m ago", state="Active", elapsed_seconds=120
@@ -280,12 +282,14 @@ class TestStatusSessions:
         assert "SUMMARY" in captured.out
         assert "feat-auth Add OAuth (+2)" in captured.out
 
+    @patch("paude.registry.SessionRegistry.load", return_value={})
     @patch("paude.session_status.get_session_enrichment")
     @patch("paude.session_discovery.collect_all_sessions")
     def test_shows_changed_files_when_no_commits(
         self,
         mock_collect: MagicMock,
         mock_enrichment: MagicMock,
+        mock_registry_load: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         from paude.backends.base import Session
@@ -299,7 +303,7 @@ class TestStatusSessions:
             backend_type="podman",
         )
         mock_backend = MagicMock()
-        mock_collect.return_value = [(mock_session, mock_backend)]
+        mock_collect.return_value = ([(mock_session, mock_backend)], {"podman"})
         mock_enrichment.return_value = (
             SessionActivity(
                 last_activity="2m ago", state="Active", elapsed_seconds=120
@@ -317,25 +321,29 @@ class TestStatusSessions:
         captured = capsys.readouterr()
         assert "editing: cli.py, workflow.py" in captured.out
 
+    @patch("paude.registry.SessionRegistry.load", return_value={})
     @patch("paude.session_discovery.collect_all_sessions")
     def test_no_sessions(
         self,
         mock_collect: MagicMock,
+        mock_registry_load: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        mock_collect.return_value = []
+        mock_collect.return_value = ([], set())
 
         status_sessions()
 
         captured = capsys.readouterr()
         assert "No sessions found" in captured.out
 
+    @patch("paude.registry.SessionRegistry.load", return_value={})
     @patch("paude.session_status.get_session_enrichment")
     @patch("paude.session_discovery.collect_all_sessions")
     def test_stopped_sessions_excluded(
         self,
         mock_collect: MagicMock,
         mock_enrichment: MagicMock,
+        mock_registry_load: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         from paude.backends.base import Session
@@ -347,21 +355,24 @@ class TestStatusSessions:
             created_at="2026-01-01T00:00:00Z",
             backend_type="podman",
         )
-        mock_collect.return_value = [(mock_session, MagicMock())]
+        mock_collect.return_value = ([(mock_session, MagicMock())], {"podman"})
 
         status_sessions()
 
         captured = capsys.readouterr()
-        assert "No running sessions" in captured.out
-        assert "stopped-session" not in captured.out
+        # Stopped sessions show in the table but are not enriched
+        assert "stopped-session" in captured.out
+        assert "stopped" in captured.out
         mock_enrichment.assert_not_called()
 
+    @patch("paude.registry.SessionRegistry.load", return_value={})
     @patch("paude.session_status.get_session_enrichment")
     @patch("paude.session_discovery.collect_all_sessions")
     def test_sorts_by_activity(
         self,
         mock_collect: MagicMock,
         mock_enrichment: MagicMock,
+        mock_registry_load: MagicMock,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         from paude.backends.base import Session
@@ -391,11 +402,14 @@ class TestStatusSessions:
         )
         mock_backend = MagicMock()
         # Order: stopped first, then idle, then active (wrong order)
-        mock_collect.return_value = [
-            (stopped, mock_backend),
-            (idle_running, mock_backend),
-            (active_running, mock_backend),
-        ]
+        mock_collect.return_value = (
+            [
+                (stopped, mock_backend),
+                (idle_running, mock_backend),
+                (active_running, mock_backend),
+            ],
+            {"podman"},
+        )
         mock_enrichment.side_effect = [
             (
                 SessionActivity(
@@ -418,11 +432,11 @@ class TestStatusSessions:
         # Skip header and separator
         data_lines = lines[2:]
         # active-ses (5s) should be first, idle-ses (10m) second
-        # stopped sessions are excluded from output
-        assert len(data_lines) == 2
+        # stopped sessions appear last in the output
+        assert len(data_lines) == 3
         assert "active-ses" in data_lines[0]
         assert "idle-ses" in data_lines[1]
-        assert "stopped-ses" not in captured.out
+        assert "stopped-ses" in data_lines[2]
 
 
 class TestResetSession:

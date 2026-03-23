@@ -258,6 +258,7 @@ def status_sessions(
     openshift_namespace: str | None = None,
 ) -> None:
     """Display enriched status for all sessions."""
+    from paude.registry import SessionRegistry, merge_registry_with_live
     from paude.session_discovery import collect_all_sessions
     from paude.session_status import (
         SessionActivity,
@@ -266,32 +267,43 @@ def status_sessions(
         get_session_enrichment,
     )
 
-    all_sessions = collect_all_sessions(
+    live_results, reachable_backends = collect_all_sessions(
         openshift_context=openshift_context,
         openshift_namespace=openshift_namespace,
     )
 
-    if not all_sessions:
+    registry = SessionRegistry()
+    live_sessions = [s for s, _b in live_results]
+    all_merged = merge_registry_with_live(registry, live_sessions, reachable_backends)
+
+    if not all_merged:
         typer.echo("No sessions found.")
         return
 
-    running = [(s, b) for s, b in all_sessions if s.status == "running"]
-    if not running:
-        typer.echo("No running sessions.")
-        return
+    # Build a backend lookup from live results for enrichment
+    backend_by_name = {s.name: b for s, b in live_results}
 
-    rows: list[tuple[Session, str, SessionActivity | None, WorkSummary | None]] = []
-    for session, backend in running:
-        activity: SessionActivity | None = None
-        summary: WorkSummary | None = None
-        try:
-            activity, summary = get_session_enrichment(
-                backend, session.name, agent_name=session.agent
-            )
-        except Exception:  # noqa: S110
-            pass
+    # Separate running sessions (enrichable) from others
+    running_rows: list[
+        tuple[Session, str, SessionActivity | None, WorkSummary | None]
+    ] = []
+    other_rows: list[tuple[Session, str]] = []
 
-        rows.append((session, session.backend_type, activity, summary))
+    for session in all_merged:
+        if session.status in ("running", "degraded"):
+            activity: SessionActivity | None = None
+            summary: WorkSummary | None = None
+            backend = backend_by_name.get(session.name)
+            if backend:
+                try:
+                    activity, summary = get_session_enrichment(
+                        backend, session.name, agent_name=session.agent
+                    )
+                except Exception:  # noqa: S110
+                    pass
+            running_rows.append((session, session.backend_type, activity, summary))
+        else:
+            other_rows.append((session, session.backend_type))
 
     def _sort_key(
         r: tuple[Session, str, SessionActivity | None, WorkSummary | None],
@@ -301,7 +313,7 @@ def status_sessions(
             return float(activity.elapsed_seconds)
         return float("inf")
 
-    rows.sort(key=_sort_key)
+    running_rows.sort(key=_sort_key)
 
     fixed_width = 20 + 15 + 10 + 10 + 10 + 5  # columns + spaces before SUMMARY
     term_width = shutil.get_terminal_size((80, 24)).columns
@@ -314,7 +326,7 @@ def status_sessions(
     typer.echo(cols)
     typer.echo("-" * len(cols))
 
-    for session, backend_type, activity, summary in rows:
+    for session, backend_type, activity, summary in running_rows:
         project = session.workspace.name if session.workspace else ""
         act_str = activity.last_activity if activity else ""
         state_str = activity.state if activity else ""
@@ -323,6 +335,13 @@ def status_sessions(
         typer.echo(
             f"{session.name:<20} {project:<15} {backend_type:<10} "
             f"{act_str:<10} {state_str:<10} {summary_str}"
+        )
+
+    for session, backend_type in other_rows:
+        project = session.workspace.name if session.workspace else ""
+        typer.echo(
+            f"{session.name:<20} {project:<15} {backend_type:<10} "
+            f"{'':<10} {session.status:<10}"
         )
 
 

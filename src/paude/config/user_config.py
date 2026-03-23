@@ -54,18 +54,22 @@ _KNOWN_KEYS = {
 _KNOWN_OPENSHIFT_KEYS = {"context", "namespace"}
 
 
-def _user_config_path() -> Path:
-    """Return the path to the user defaults file.
+def _paude_config_dir() -> Path:
+    """Return the paude config directory.
 
-    Uses $XDG_CONFIG_HOME/paude/defaults.json, falling back to
-    ~/.config/paude/defaults.json.
+    Uses $XDG_CONFIG_HOME/paude, falling back to ~/.config/paude.
     """
     xdg = os.environ.get("XDG_CONFIG_HOME")
     if xdg:
         base = Path(xdg)
     else:
         base = Path.home() / ".config"
-    return base / "paude" / "defaults.json"
+    return base / "paude"
+
+
+def _user_config_path() -> Path:
+    """Return the path to the user defaults file."""
+    return _paude_config_dir() / "defaults.json"
 
 
 def load_user_defaults(config_path: Path | None = None) -> UserDefaults:
