@@ -8,7 +8,6 @@ from typing import Annotated
 import typer
 
 from paude.backends import (
-    PodmanBackend,
     SessionNotFoundError,
 )
 from paude.backends.base import Backend
@@ -23,7 +22,6 @@ from paude.cli.helpers import (
     find_session_backend,
 )
 from paude.session_discovery import (
-    create_openshift_backend,
     resolve_session_for_backend,
 )
 
@@ -74,6 +72,10 @@ def session_delete(
         typer.echo("Use --confirm to proceed.", err=True)
         raise typer.Exit(1)
 
+    from paude.registry import SessionRegistry
+
+    registry = SessionRegistry()
+
     # Auto-detect backend if not specified
     if backend is None:
         result = find_session_backend(name, openshift_context, openshift_namespace)
@@ -82,6 +84,7 @@ def session_delete(
             workspace = _get_session_workspace(backend_obj, name)
             try:
                 backend_obj.delete_session(name, confirm=True)
+                registry.unregister(name)
                 typer.echo(f"Session '{name}' deleted.")
                 _cleanup_session_git_remote(name, workspace)
                 return
@@ -98,6 +101,7 @@ def session_delete(
     workspace = _get_session_workspace(backend_instance, name)
     try:
         backend_instance.delete_session(name, confirm=True)
+        registry.unregister(name)
         typer.echo(f"Session '{name}' deleted.")
         _cleanup_session_git_remote(name, workspace)
     except (SessionNotFoundError, OpenshiftSessionNotFoundError) as e:
@@ -405,24 +409,19 @@ def session_list(
     ] = None,
 ) -> None:
     """List all sessions."""
-    all_sessions = []
+    from paude.registry import SessionRegistry, merge_registry_with_live
+    from paude.session_discovery import collect_all_sessions
 
-    # Get Podman sessions
-    if backend is None or backend == BackendType.podman:
-        try:
-            podman_backend = PodmanBackend()
-            all_sessions.extend(podman_backend.list_sessions())
-        except Exception:  # noqa: S110 - Podman may not be available
-            pass
+    live_results, reachable_backends = collect_all_sessions(
+        openshift_context=openshift_context,
+        openshift_namespace=openshift_namespace,
+        skip_podman=backend == BackendType.openshift,
+        skip_openshift=backend == BackendType.podman,
+    )
+    live_sessions = [s for s, _b in live_results]
 
-    # Get OpenShift sessions
-    if backend is None or backend == BackendType.openshift:
-        os_backend = create_openshift_backend(openshift_context, openshift_namespace)
-        if os_backend is not None:
-            try:
-                all_sessions.extend(os_backend.list_sessions())
-            except Exception:  # noqa: S110
-                pass
+    registry = SessionRegistry()
+    all_sessions = merge_registry_with_live(registry, live_sessions, reachable_backends)
 
     if not all_sessions:
         typer.echo("No sessions found.")
@@ -440,13 +439,11 @@ def session_list(
     typer.echo("-" * 90)
 
     for session in all_sessions:
-        # Handle both old (id) and new (name) session formats
-        session_name = getattr(session, "name", getattr(session, "id", "unknown"))
         workspace_str = str(session.workspace)
         if len(workspace_str) > 40:
             workspace_str = "..." + workspace_str[-37:]
         line = (
-            f"{session_name:<25} {session.backend_type:<12} "
+            f"{session.name:<25} {session.backend_type:<12} "
             f"{session.status:<12} {workspace_str:<40}"
         )
         typer.echo(line)

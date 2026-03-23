@@ -189,7 +189,8 @@ def _remote_cleanup(
 
     # Collect all active session names
     active_sessions: set[str] = set()
-    for session, _ in collect_all_sessions(openshift_context, openshift_namespace):
+    all_sessions, _ = collect_all_sessions(openshift_context, openshift_namespace)
+    for session, _ in all_sessions:
         active_sessions.add(session.name)
 
     removed = 0

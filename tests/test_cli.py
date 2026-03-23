@@ -1538,7 +1538,7 @@ class TestRemoteCleanup:
         ]
         active_session = MagicMock()
         active_session.name = "active"
-        mock_collect.return_value = [(active_session, MagicMock())]
+        mock_collect.return_value = ([(active_session, MagicMock())], {"podman"})
 
         with patch("paude.git_remote.git_remote_remove", return_value=True) as mock_rm:
             result = runner.invoke(app, ["remote", "cleanup"])
@@ -1564,7 +1564,7 @@ class TestRemoteCleanup:
         ]
         active_session = MagicMock()
         active_session.name = "active"
-        mock_collect.return_value = [(active_session, MagicMock())]
+        mock_collect.return_value = ([(active_session, MagicMock())], {"podman"})
 
         result = runner.invoke(app, ["remote", "cleanup"])
 
@@ -1602,7 +1602,7 @@ class TestRemoteCleanup:
             ("paude-gone1", "ext::podman exec paude-gone1 %S /pvc/workspace"),
             ("paude-gone2", "ext::podman exec paude-gone2 %S /pvc/workspace"),
         ]
-        mock_collect.return_value = []
+        mock_collect.return_value = ([], set())
 
         with patch("paude.git_remote.git_remote_remove", return_value=True) as mock_rm:
             result = runner.invoke(app, ["remote", "cleanup"])

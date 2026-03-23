@@ -309,12 +309,13 @@ class TestCollectAllSessions:
         mock_os_backend.list_sessions.return_value = [os_session]
         mock_os_backend_class.return_value = mock_os_backend
 
-        result = collect_all_sessions()
+        result, reachable = collect_all_sessions()
 
         assert len(result) == 2
         names = [s.name for s, _ in result]
         assert "podman-s1" in names
         assert "os-s1" in names
+        assert reachable == {"podman", "openshift"}
 
     @patch("paude.session_discovery.OpenShiftConfig")
     @patch("paude.session_discovery.OpenShiftBackend")
@@ -342,10 +343,11 @@ class TestCollectAllSessions:
         mock_os_backend.list_sessions.return_value = []
         mock_os_backend_class.return_value = mock_os_backend
 
-        result = collect_all_sessions(status_filter="running")
+        result, reachable = collect_all_sessions(status_filter="running")
 
         assert len(result) == 1
         assert result[0][0].name == "running-s"
+        assert "podman" in reachable
 
     @patch("paude.session_discovery.OpenShiftConfig")
     @patch("paude.session_discovery.OpenShiftBackend")
@@ -367,9 +369,10 @@ class TestCollectAllSessions:
         mock_os_backend.list_sessions.return_value = []
         mock_os_backend_class.return_value = mock_os_backend
 
-        result = collect_all_sessions()
+        result, reachable = collect_all_sessions()
 
         assert result == []
+        assert reachable == {"podman", "openshift"}
 
     @patch("paude.session_discovery.OpenShiftConfig")
     @patch("paude.session_discovery.OpenShiftBackend")
@@ -390,10 +393,11 @@ class TestCollectAllSessions:
         mock_os_backend.list_sessions.return_value = [os_session]
         mock_os_backend_class.return_value = mock_os_backend
 
-        result = collect_all_sessions()
+        result, reachable = collect_all_sessions()
 
         assert len(result) == 1
         assert result[0][0].name == "os-s1"
+        assert reachable == {"openshift"}
 
     @patch("paude.session_discovery.OpenShiftConfig")
     @patch("paude.session_discovery.OpenShiftBackend")
@@ -414,10 +418,11 @@ class TestCollectAllSessions:
 
         mock_os_backend_class.side_effect = Exception("oc not found")
 
-        result = collect_all_sessions()
+        result, reachable = collect_all_sessions()
 
         assert len(result) == 1
         assert result[0][0].name == "podman-s1"
+        assert reachable == {"podman"}
 
     @patch("paude.session_discovery.OpenShiftConfig")
     @patch("paude.session_discovery.OpenShiftBackend")
@@ -439,9 +444,12 @@ class TestCollectAllSessions:
         pre_os = MagicMock()
         pre_os.list_sessions.return_value = [os_session]
 
-        result = collect_all_sessions(podman_backend=pre_podman, os_backend=pre_os)
+        result, reachable = collect_all_sessions(
+            podman_backend=pre_podman, os_backend=pre_os
+        )
 
         assert len(result) == 2
+        assert reachable == {"podman", "openshift"}
         # Should NOT have created new backends
         mock_podman_class.assert_not_called()
         mock_os_backend_class.assert_not_called()
@@ -467,10 +475,11 @@ class TestCollectAllSessions:
         mock_os_backend.list_sessions.return_value = [os_session]
         mock_os_backend_class.return_value = mock_os_backend
 
-        result = collect_all_sessions()
+        result, reachable = collect_all_sessions()
 
         assert len(result) == 1
         assert result[0][0].name == "os-s1"
+        assert reachable == {"podman", "openshift"}
         mock_os_backend_class.assert_called_once()
 
 

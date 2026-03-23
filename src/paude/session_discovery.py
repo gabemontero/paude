@@ -93,7 +93,10 @@ def collect_all_sessions(
     status_filter: str | None = None,
     podman_backend: PodmanBackend | None = None,
     os_backend: OpenShiftBackend | None = None,
-) -> list[tuple[Session, Backend]]:
+    *,
+    skip_podman: bool = False,
+    skip_openshift: bool = False,
+) -> tuple[list[tuple[Session, Backend]], set[str]]:
     """Collect sessions from all available backends.
 
     Args:
@@ -103,40 +106,50 @@ def collect_all_sessions(
             (e.g. "running"). If None, includes all sessions.
         podman_backend: Reuse an existing PodmanBackend instance.
         os_backend: Reuse an existing OpenShiftBackend instance.
+        skip_podman: If True, skip Podman backend entirely.
+        skip_openshift: If True, skip OpenShift backend entirely.
 
     Returns:
-        List of (session, backend) tuples.
+        Tuple of (list of (session, backend) tuples, set of reachable
+        backend types).
     """
     all_sessions: list[tuple[Session, Backend]] = []
+    reachable_backends: set[str] = set()
 
     # Try Podman
-    if podman_backend is None:
-        try:
-            podman_backend = PodmanBackend()
-        except Exception:  # noqa: S110
-            pass
+    if not skip_podman:
+        if podman_backend is None:
+            try:
+                podman_backend = PodmanBackend()
+            except Exception:  # noqa: S110
+                pass
 
-    if podman_backend is not None:
-        try:
-            for s in podman_backend.list_sessions():
-                if _status_matches(s.status, status_filter):
-                    all_sessions.append((s, podman_backend))
-        except Exception:  # noqa: S110
-            pass
+        if podman_backend is not None:
+            try:
+                for s in podman_backend.list_sessions():
+                    if _status_matches(s.status, status_filter):
+                        all_sessions.append((s, podman_backend))
+                reachable_backends.add("podman")
+            except Exception:  # noqa: S110
+                pass
 
     # Try OpenShift
-    if os_backend is None:
-        os_backend = create_openshift_backend(openshift_context, openshift_namespace)
+    if not skip_openshift:
+        if os_backend is None:
+            os_backend = create_openshift_backend(
+                openshift_context, openshift_namespace
+            )
 
-    if os_backend is not None:
-        try:
-            for s in os_backend.list_sessions():
-                if _status_matches(s.status, status_filter):
-                    all_sessions.append((s, os_backend))
-        except Exception:  # noqa: S110
-            pass
+        if os_backend is not None:
+            try:
+                for s in os_backend.list_sessions():
+                    if _status_matches(s.status, status_filter):
+                        all_sessions.append((s, os_backend))
+                reachable_backends.add("openshift")
+            except Exception:  # noqa: S110
+                pass
 
-    return all_sessions
+    return all_sessions, reachable_backends
 
 
 def resolve_session_for_backend(
