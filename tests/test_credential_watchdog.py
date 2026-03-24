@@ -74,9 +74,11 @@ class TestOpenShiftBackendCredentialTimeout:
         )
 
         # Mock methods that would be called
-        with patch.object(backend, "_get_statefulset", return_value=None):
+        with patch.object(backend._lookup, "get_statefulset", return_value=None):
             with patch.object(backend._proxy, "ensure_network_policy_permissive"):
-                with patch.object(backend, "_generate_statefulset_spec") as mock_spec:
+                with patch.object(
+                    backend._lifecycle, "_generate_statefulset_spec"
+                ) as mock_spec:
                     with patch.object(backend._pod_waiter, "wait_for_ready"):
                         with patch.object(backend._syncer, "sync_full_config"):
                             mock_spec.return_value = {"kind": "StatefulSet"}
@@ -117,9 +119,11 @@ class TestOpenShiftBackendCredentialTimeout:
             credential_timeout=0,
         )
 
-        with patch.object(backend, "_get_statefulset", return_value=None):
+        with patch.object(backend._lookup, "get_statefulset", return_value=None):
             with patch.object(backend._proxy, "ensure_network_policy_permissive"):
-                with patch.object(backend, "_generate_statefulset_spec") as mock_spec:
+                with patch.object(
+                    backend._lifecycle, "_generate_statefulset_spec"
+                ) as mock_spec:
                     with patch.object(backend._pod_waiter, "wait_for_ready"):
                         with patch.object(backend._syncer, "sync_full_config"):
                             mock_spec.return_value = {"kind": "StatefulSet"}
