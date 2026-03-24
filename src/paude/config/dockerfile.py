@@ -11,6 +11,24 @@ if TYPE_CHECKING:
     from paude.agents.base import Agent
 
 
+def _package_install_lines(packages: list[str]) -> list[str]:
+    """Generate Dockerfile lines to install OS packages via the detected package manager."""
+    pkg_list = " ".join(packages)
+    return [
+        "",
+        "# User-specified packages from paude.json",
+        f"""RUN if command -v apt-get >/dev/null 2>&1; then \\
+        apt-get update && apt-get install -y {pkg_list} && rm -rf /var/lib/apt/lists/*; \\
+    elif command -v apk >/dev/null 2>&1; then \\
+        apk add --no-cache {pkg_list}; \\
+    elif command -v dnf >/dev/null 2>&1; then \\
+        dnf install -y {pkg_list} && dnf clean all; \\
+    elif command -v yum >/dev/null 2>&1; then \\
+        yum install -y {pkg_list} && yum clean all; \\
+    fi""",
+    ]
+
+
 def generate_pip_install_dockerfile(
     config: PaudeConfig,
     include_claude_install: bool = False,
@@ -35,34 +53,25 @@ def generate_pip_install_dockerfile(
     lines.append("ARG BASE_IMAGE")
     lines.append("FROM ${BASE_IMAGE}")
 
+    # Switch to root for package installation and feature injection
+    lines.append("")
+    lines.append("# Ensure root for any feature installation")
+    lines.append("USER root")
+
+    if config.packages:
+        lines.extend(_package_install_lines(config.packages))
+
     if include_claude_install:
         if agent is None:
             from paude.agents import get_agent
 
             agent = get_agent("claude")
 
-        # Switch to root first in case base image ends with non-root user
-        # This ensures any feature injection (done before USER paude) runs as root
-        lines.append("")
-        lines.append("# Ensure root for any feature installation")
-        lines.append("USER root")
-
         lines.extend(agent.dockerfile_install_lines(CONTAINER_HOME))
 
-        lines.append("")
-        lines.append("# Switch back to paude user for runtime")
-        lines.append("USER paude")
-        lines.append(f"WORKDIR {CONTAINER_HOME}")
-
-    if not include_claude_install:
-        # Add minimal structure for feature injection compatibility.
-        # Features are injected before the first USER paude line.
-        lines.append("")
-        lines.append("# Ensure root for any feature installation")
-        lines.append("USER root")
-        lines.append("")
-        lines.append("USER paude")
-        lines.append(f"WORKDIR {CONTAINER_HOME}")
+    lines.append("")
+    lines.append("USER paude")
+    lines.append(f"WORKDIR {CONTAINER_HOME}")
 
     return "\n".join(lines)
 
@@ -95,18 +104,7 @@ def generate_workspace_dockerfile(
 
     # Add user-specified packages if any (from paude.json "packages" array)
     if config.packages:
-        pkg_list = " ".join(config.packages)
-        lines.append("")
-        lines.append("# User-specified packages from paude.json")
-        lines.append(f"""RUN if command -v apt-get >/dev/null 2>&1; then \\
-        apt-get update && apt-get install -y {pkg_list} && rm -rf /var/lib/apt/lists/*; \\
-    elif command -v apk >/dev/null 2>&1; then \\
-        apk add --no-cache {pkg_list}; \\
-    elif command -v dnf >/dev/null 2>&1; then \\
-        dnf install -y {pkg_list} && dnf clean all; \\
-    elif command -v yum >/dev/null 2>&1; then \\
-        yum install -y {pkg_list} && yum clean all; \\
-    fi""")
+        lines.extend(_package_install_lines(config.packages))
 
     # Standard paude requirements (including tmux for OpenShift session persistence)
     lines.append("")
