@@ -50,7 +50,8 @@ def _build_script(home_dir: str, seed_dir: str, credentials_dir: str | None) -> 
             mkdir -p "$HOME/.claude"
             chmod g+rwX "$HOME/.claude" 2>/dev/null || true
 
-            cp -a --no-preserve=ownership "$SEED_DIR/." "$HOME/.claude/" 2>/dev/null || true
+            cp -a --no-preserve=ownership "$SEED_DIR/." "$HOME/.claude/" 2>/dev/null \
+                || cp -a "$SEED_DIR/." "$HOME/.claude/" 2>/dev/null || true
 
             if [[ -f "$HOME/.claude/claude.json" ]]; then
                 mv "$HOME/.claude/claude.json" "$HOME/.claude.json" 2>/dev/null || true
