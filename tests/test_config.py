@@ -530,6 +530,26 @@ class TestGeneratePipInstallDockerfile:
             f"Second USER should be 'USER paude', got '{user_lines[1][1]}'"
         )
 
+    def test_includes_packages_with_claude_install(self):
+        """generate_pip_install_dockerfile installs packages when layering on default image."""
+        config = PaudeConfig(packages=["python3.12-devel", "gcc"])
+        dockerfile = generate_pip_install_dockerfile(
+            config, include_claude_install=True
+        )
+
+        assert "python3.12-devel gcc" in dockerfile
+        assert "User-specified packages from paude.json" in dockerfile
+
+    def test_includes_packages_without_claude_install(self):
+        """generate_pip_install_dockerfile installs packages in minimal mode."""
+        config = PaudeConfig(packages=["vim"])
+        dockerfile = generate_pip_install_dockerfile(
+            config, include_claude_install=False
+        )
+
+        assert "vim" in dockerfile
+        assert "User-specified packages from paude.json" in dockerfile
+
     def test_minimal_dockerfile_has_user_paude_for_features(self):
         """Minimal Dockerfile (no claude) still has USER paude for features.
 

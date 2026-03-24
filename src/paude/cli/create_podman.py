@@ -58,7 +58,13 @@ def create_podman_session(
 
     # Ensure image
     try:
-        has_custom = config and (config.base_image or config.dockerfile)
+        has_custom = config and (
+            config.base_image
+            or config.dockerfile
+            or config.packages
+            or config.features
+            or config.post_create_command
+        )
         if has_custom and config is not None:
             image = image_manager.ensure_custom_image(
                 config, force_rebuild=rebuild, workspace=workspace
