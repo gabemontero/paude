@@ -181,24 +181,33 @@ def engine_binary_for_backend(backend_type: str) -> str:
     raise ValueError(f"No engine binary for backend type: {backend_type}")
 
 
-def build_ssh_backend(entry: object) -> PodmanBackend | None:
+def build_ssh_backend(
+    entry: object,
+    connect_timeout: int | None = None,
+) -> PodmanBackend | None:
     """Reconstruct a PodmanBackend with SSH transport from a registry entry.
 
     Args:
         entry: A RegistryEntry (or any object) to inspect.
+        connect_timeout: SSH connect timeout in seconds. Uses default if None.
 
     Returns:
         PodmanBackend configured with SSH transport, or None on failure.
     """
     from paude.container.engine import ContainerEngine
     from paude.registry import RegistryEntry
-    from paude.transport.ssh import SshTransport, parse_ssh_host
+    from paude.transport.ssh import SSH_CONNECT_TIMEOUT, SshTransport, parse_ssh_host
 
     if not isinstance(entry, RegistryEntry) or not entry.ssh_host:
         return None
 
     host, port = parse_ssh_host(entry.ssh_host)
-    transport = SshTransport(host, key=entry.ssh_key, port=port)
+    transport = SshTransport(
+        host,
+        key=entry.ssh_key,
+        port=port,
+        connect_timeout=connect_timeout or SSH_CONNECT_TIMEOUT,
+    )
     engine = ContainerEngine(entry.engine, transport=transport)
     try:
         from paude.backends import PodmanBackend

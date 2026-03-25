@@ -70,6 +70,8 @@ class TestSshTransport:
             "BatchMode=yes",
             "-o",
             "StrictHostKeyChecking=accept-new",
+            "-o",
+            "ConnectTimeout=10",
             "user@host",
         ]
 
