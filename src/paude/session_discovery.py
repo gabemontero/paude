@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 import typer
@@ -10,6 +11,8 @@ from paude.backends import PodmanBackend, Session
 from paude.backends.base import Backend
 from paude.backends.openshift import OpenShiftBackend, OpenShiftConfig
 from paude.container.engine import ContainerEngine
+from paude.registry import RegistryEntry
+from paude.transport.ssh import SSH_STATUS_TIMEOUT
 
 
 def create_openshift_backend(
@@ -102,11 +105,28 @@ def find_workspace_session(
     return None
 
 
-def _build_ssh_backend(entry: object) -> PodmanBackend | None:
+def _build_ssh_backend(
+    entry: object,
+    connect_timeout: int | None = None,
+) -> PodmanBackend | None:
     """Reconstruct a PodmanBackend with SSH transport from a registry entry."""
     from paude.backends.shared import build_ssh_backend
 
-    return build_ssh_backend(entry)
+    return build_ssh_backend(entry, connect_timeout=connect_timeout)
+
+
+def _probe_ssh_entry(
+    entry: RegistryEntry,
+    status_filter: str | None,
+) -> tuple[Session, Backend] | None:
+    """Probe a single SSH registry entry for status match."""
+    backend = _build_ssh_backend(entry, connect_timeout=SSH_STATUS_TIMEOUT)
+    if backend is None:
+        return None
+    session = backend.get_session(entry.name)
+    if session and _status_matches(session.status, status_filter):
+        return (session, backend)
+    return None
 
 
 def _find_ssh_workspace_session(
@@ -117,20 +137,23 @@ def _find_ssh_workspace_session(
     from paude.registry import SessionRegistry
 
     registry = SessionRegistry()
-    for entry in registry.list_entries():
-        if not entry.ssh_host:
-            continue
-        if entry.workspace and Path(entry.workspace) != workspace:
-            continue
-        backend = _build_ssh_backend(entry)
-        if backend is None:
-            continue
-        try:
-            session = backend.get_session(entry.name)
-            if session and _status_matches(session.status, status_filter):
-                return (session, backend)
-        except Exception:  # noqa: S110 - remote may be unreachable
-            pass
+    ssh_entries = [
+        e
+        for e in registry.list_entries()
+        if e.ssh_host and (not e.workspace or Path(e.workspace) == workspace)
+    ]
+    if not ssh_entries:
+        return None
+
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_probe_ssh_entry, e, status_filter) for e in ssh_entries]
+        for fut in as_completed(futures):
+            try:
+                result = fut.result()
+                if result is not None:
+                    return result
+            except Exception:  # noqa: S110 - remote may be unreachable
+                pass
     return None
 
 
@@ -140,21 +163,66 @@ def _collect_ssh_sessions(
     """Collect sessions from SSH remotes registered in the local registry."""
     from paude.registry import SessionRegistry
 
-    results: list[tuple[Session, Backend]] = []
     registry = SessionRegistry()
-    for entry in registry.list_entries():
-        if not entry.ssh_host:
-            continue
-        backend = _build_ssh_backend(entry)
-        if backend is None:
-            continue
-        try:
-            session = backend.get_session(entry.name)
-            if session and _status_matches(session.status, status_filter):
-                results.append((session, backend))
-        except Exception:  # noqa: S110 - remote may be unreachable
-            pass
+    ssh_entries = [e for e in registry.list_entries() if e.ssh_host]
+    if not ssh_entries:
+        return []
+
+    results: list[tuple[Session, Backend]] = []
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures = [pool.submit(_probe_ssh_entry, e, status_filter) for e in ssh_entries]
+        for fut in as_completed(futures):
+            try:
+                result = fut.result()
+                if result is not None:
+                    results.append(result)
+            except Exception:  # noqa: S110 - remote may be unreachable
+                pass
     return results
+
+
+def _collect_podman_sessions(
+    podman_backend: PodmanBackend | None,
+    status_filter: str | None,
+) -> list[tuple[Session, Backend]]:
+    """Collect sessions from the Podman backend."""
+    if podman_backend is None:
+        podman_backend = PodmanBackend()
+    return [
+        (s, podman_backend)
+        for s in podman_backend.list_sessions()
+        if _status_matches(s.status, status_filter)
+    ]
+
+
+def _collect_docker_sessions(
+    status_filter: str | None,
+) -> list[tuple[Session, Backend]]:
+    """Collect sessions from the Docker backend."""
+    docker_backend = PodmanBackend(engine=ContainerEngine("docker"))
+    return [
+        (s, docker_backend)
+        for s in docker_backend.list_sessions()
+        if _status_matches(s.status, status_filter)
+    ]
+
+
+def _collect_openshift_sessions(
+    os_backend: OpenShiftBackend | None,
+    openshift_context: str | None,
+    openshift_namespace: str | None,
+    status_filter: str | None,
+) -> list[tuple[Session, Backend]]:
+    """Collect sessions from the OpenShift backend."""
+    if os_backend is None:
+        os_backend = create_openshift_backend(openshift_context, openshift_namespace)
+    if os_backend is None:
+        raise RuntimeError("OpenShift not available")
+    return [
+        (s, os_backend)
+        for s in os_backend.list_sessions()
+        if _status_matches(s.status, status_filter)
+    ]
 
 
 def collect_all_sessions(
@@ -167,7 +235,7 @@ def collect_all_sessions(
     skip_podman: bool = False,
     skip_openshift: bool = False,
 ) -> tuple[list[tuple[Session, Backend]], set[str]]:
-    """Collect sessions from all available backends.
+    """Collect sessions from all available backends concurrently.
 
     Args:
         openshift_context: Optional OpenShift kubeconfig context.
@@ -186,53 +254,40 @@ def collect_all_sessions(
     all_sessions: list[tuple[Session, Backend]] = []
     reachable_backends: set[str] = set()
 
-    # Try Podman
-    if not skip_podman:
-        if podman_backend is None:
-            try:
-                podman_backend = PodmanBackend()
-            except Exception:  # noqa: S110
-                pass
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        futures: dict[str, Future[list[tuple[Session, Backend]]]] = {}
 
-        if podman_backend is not None:
-            try:
-                for s in podman_backend.list_sessions():
-                    if _status_matches(s.status, status_filter):
-                        all_sessions.append((s, podman_backend))
-                reachable_backends.add("podman")
-            except Exception:  # noqa: S110
-                pass
+        if not skip_podman:
+            futures["podman"] = pool.submit(
+                _collect_podman_sessions, podman_backend, status_filter
+            )
+            futures["docker"] = pool.submit(_collect_docker_sessions, status_filter)
 
-        # Also try Docker
-        try:
-            docker_backend = PodmanBackend(engine=ContainerEngine("docker"))
-            for s in docker_backend.list_sessions():
-                if _status_matches(s.status, status_filter):
-                    all_sessions.append((s, docker_backend))
-            reachable_backends.add("docker")
-        except Exception:  # noqa: S110
-            pass
-
-    # Try OpenShift
-    if not skip_openshift:
-        if os_backend is None:
-            os_backend = create_openshift_backend(
-                openshift_context, openshift_namespace
+        if not skip_openshift:
+            futures["openshift"] = pool.submit(
+                _collect_openshift_sessions,
+                os_backend,
+                openshift_context,
+                openshift_namespace,
+                status_filter,
             )
 
-        if os_backend is not None:
+        futures["ssh"] = pool.submit(_collect_ssh_sessions, status_filter)
+
+        ssh_sessions: list[tuple[Session, Backend]] = []
+        for key, fut in futures.items():
             try:
-                for s in os_backend.list_sessions():
-                    if _status_matches(s.status, status_filter):
-                        all_sessions.append((s, os_backend))
-                reachable_backends.add("openshift")
+                sessions = fut.result()
+                if key == "ssh":
+                    ssh_sessions = sessions
+                else:
+                    all_sessions.extend(sessions)
+                    reachable_backends.add(key)
             except Exception:  # noqa: S110
                 pass
 
-    # Try SSH sessions from registry
-    ssh_sessions = _collect_ssh_sessions(status_filter)
+    # Deduplicate: skip SSH sessions already found via other backends
     if ssh_sessions:
-        # Deduplicate: skip SSH sessions already found locally
         known_names = {s.name for s, _ in all_sessions}
         for s, b in ssh_sessions:
             if s.name not in known_names:

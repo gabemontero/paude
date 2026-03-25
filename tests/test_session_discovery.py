@@ -290,11 +290,17 @@ class TestCollectAllSessions:
     """Tests for collect_all_sessions."""
 
     @pytest.fixture(autouse=True)
-    def _mock_docker_engine(self):
-        """Block Docker backend creation in collect_all_sessions."""
-        with patch(
-            "paude.session_discovery.ContainerEngine",
-            side_effect=Exception("docker not available"),
+    def _mock_docker_and_ssh(self):
+        """Block Docker and SSH backends in collect_all_sessions."""
+        with (
+            patch(
+                "paude.session_discovery._collect_docker_sessions",
+                side_effect=Exception("docker not available"),
+            ),
+            patch(
+                "paude.session_discovery._collect_ssh_sessions",
+                return_value=[],
+            ),
         ):
             yield
 
@@ -799,3 +805,85 @@ class TestSshSessionDiscovery:
             created_at="2024-01-01T00:00:00",
         )
         assert _build_ssh_backend(entry) is None
+
+    @patch("paude.session_discovery._build_ssh_backend")
+    @patch("paude.registry.SessionRegistry")
+    def test_collect_ssh_sessions_handles_unreachable_host(
+        self,
+        mock_registry_cls,
+        mock_build,
+    ):
+        """_collect_ssh_sessions skips unreachable hosts gracefully."""
+        from paude.session_discovery import _collect_ssh_sessions
+
+        reachable_entry = MagicMock()
+        reachable_entry.ssh_host = "user@reachable"
+        reachable_entry.name = "reachable-session"
+
+        unreachable_entry = MagicMock()
+        unreachable_entry.ssh_host = "user@unreachable"
+        unreachable_entry.name = "unreachable-session"
+
+        mock_registry = MagicMock()
+        mock_registry.list_entries.return_value = [reachable_entry, unreachable_entry]
+        mock_registry_cls.return_value = mock_registry
+
+        reachable_backend = MagicMock()
+        reachable_session = MagicMock()
+        reachable_session.status = "running"
+        reachable_backend.get_session.return_value = reachable_session
+
+        unreachable_backend = MagicMock()
+        unreachable_backend.get_session.side_effect = Exception("Connection refused")
+
+        def build_side_effect(entry, **_kwargs):
+            if entry.name == "reachable-session":
+                return reachable_backend
+            return unreachable_backend
+
+        mock_build.side_effect = build_side_effect
+
+        results = _collect_ssh_sessions()
+
+        assert len(results) == 1
+        assert results[0] == (reachable_session, reachable_backend)
+
+    @patch("paude.session_discovery._build_ssh_backend")
+    @patch("paude.registry.SessionRegistry")
+    def test_collect_ssh_sessions_queries_all_entries(
+        self,
+        mock_registry_cls,
+        mock_build,
+    ):
+        """_collect_ssh_sessions queries all SSH entries concurrently."""
+        from paude.session_discovery import _collect_ssh_sessions
+
+        entries = []
+        backends = {}
+        for i in range(3):
+            entry = MagicMock()
+            entry.ssh_host = f"user@host{i}"
+            entry.name = f"session-{i}"
+            entries.append(entry)
+
+            backend = MagicMock()
+            session = MagicMock()
+            session.status = "running"
+            backend.get_session.return_value = session
+            backends[f"session-{i}"] = (backend, session)
+
+        mock_registry = MagicMock()
+        mock_registry.list_entries.return_value = entries
+        mock_registry_cls.return_value = mock_registry
+
+        def build_side_effect(entry, **_kwargs):
+            return backends[entry.name][0]
+
+        mock_build.side_effect = build_side_effect
+
+        results = _collect_ssh_sessions()
+
+        assert len(results) == 3
+        # Verify all backends were queried
+        for _name, (backend, _) in backends.items():
+            backend.get_session.assert_called_once()

@@ -5,6 +5,9 @@ from __future__ import annotations
 import shlex
 import subprocess
 
+SSH_CONNECT_TIMEOUT = 10
+SSH_STATUS_TIMEOUT = 2
+
 
 class SshTransport:
     """Execute commands on a remote host via SSH.
@@ -18,10 +21,12 @@ class SshTransport:
         host: str,
         key: str | None = None,
         port: int | None = None,
+        connect_timeout: int = SSH_CONNECT_TIMEOUT,
     ) -> None:
         self._host = host
         self._key = key
         self._port = port
+        self._connect_timeout = connect_timeout
 
     @property
     def host(self) -> str:
@@ -42,6 +47,8 @@ class SshTransport:
             "BatchMode=yes",
             "-o",
             "StrictHostKeyChecking=accept-new",
+            "-o",
+            f"ConnectTimeout={self._connect_timeout}",
         ]
         if self._key:
             cmd.extend(["-i", self._key])

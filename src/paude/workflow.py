@@ -6,6 +6,7 @@ import fnmatch
 import shlex
 import shutil
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import typer
@@ -296,21 +297,35 @@ def status_sessions(
     ] = []
     other_rows: list[tuple[Session, str]] = []
 
-    for session in all_merged:
-        if session.status in ("running", "degraded"):
-            activity: SessionActivity | None = None
-            summary: WorkSummary | None = None
+    # Enrich running sessions concurrently
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        enrichment_futures = []
+        for session in all_merged:
+            if session.status not in ("running", "degraded"):
+                other_rows.append((session, session.backend_type))
+                continue
             backend = backend_by_name.get(session.name)
-            if backend:
-                try:
-                    activity, summary = get_session_enrichment(
-                        backend, session.name, agent_name=session.agent
-                    )
-                except Exception:  # noqa: S110
-                    pass
+            if not backend:
+                running_rows.append((session, session.backend_type, None, None))
+                continue
+            enrichment_futures.append(
+                (
+                    session,
+                    pool.submit(
+                        get_session_enrichment,
+                        backend,
+                        session.name,
+                        agent_name=session.agent,
+                    ),
+                )
+            )
+
+        for session, fut in enrichment_futures:
+            try:
+                activity, summary = fut.result()
+            except Exception:  # noqa: S110
+                activity, summary = None, None
             running_rows.append((session, session.backend_type, activity, summary))
-        else:
-            other_rows.append((session, session.backend_type))
 
     def _sort_key(
         r: tuple[Session, str, SessionActivity | None, WorkSummary | None],
