@@ -192,7 +192,7 @@ class StatefulSetBuilder:
             "name": "paude",
             "image": self._image,
             "imagePullPolicy": image_pull_policy,
-            "command": ["sleep", "infinity"],
+            "command": ["tini", "--", "sleep", "infinity"],
             "stdin": True,
             "tty": True,
             "env": env_list,

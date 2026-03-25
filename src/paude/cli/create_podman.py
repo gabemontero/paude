@@ -118,7 +118,7 @@ def create_podman_session(
         backend_instance = PodmanBackend(engine=engine)
         session = backend_instance.create_session(session_config)
 
-        # Auto-start the container (entrypoint is sleep infinity)
+        # Auto-start the container (entrypoint is tini -- sleep infinity)
         backend_instance.start_session_no_attach(session.name)
     except SessionExistsError as e:
         typer.echo(f"Error: {e}", err=True)

@@ -170,14 +170,14 @@ class TestWatchdogScriptRegression:
         return WATCHDOG_SCRIPT.read_text()
 
     def test_client_threshold_is_zero(self) -> None:
-        """The watchdog must use -gt 0 since PID 1 is sleep infinity, not tmux."""
+        """The watchdog must use -gt 0 since PID 1 is tini, not tmux."""
         content = self._read_watchdog()
         assert "-gt 0" in content, (
             "has_tmux_clients() must compare client_count -gt 0, "
-            "not -gt 1 (PID 1 is sleep infinity, not tmux)"
+            "not -gt 1 (PID 1 is tini, not tmux)"
         )
         assert "-gt 1" not in content, (
-            "Found -gt 1 in watchdog script. With sleep infinity as PID 1, "
+            "Found -gt 1 in watchdog script. With tini as PID 1, "
             "any tmux client means a real user is connected."
         )
 
@@ -185,6 +185,5 @@ class TestWatchdogScriptRegression:
         """The watchdog must not assume PID 1 is a tmux client."""
         content = self._read_watchdog()
         assert "PID 1" not in content, (
-            "Watchdog script should not reference PID 1 — "
-            "PID 1 is sleep infinity, not tmux."
+            "Watchdog script should not reference PID 1 — PID 1 is tini, not tmux."
         )
