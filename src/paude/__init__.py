@@ -1,3 +1,3 @@
 """Paude - Run AI coding agents in isolated, secure containers."""
 
-__version__ = "0.13.0"
+__version__ = "0.14.0"
