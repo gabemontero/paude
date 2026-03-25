@@ -35,7 +35,6 @@ RUN dnf install -y dnf-plugins-core && \
         unzip \
         zip \
         tree \
-        tini \
     && dnf clean all && \
     alternatives --install /usr/bin/python python /usr/bin/python3.12 1 && \
     alternatives --install /usr/bin/python3 python3 /usr/bin/python3.12 1
@@ -49,6 +48,19 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin sh \
     && uv --version
 SHELL ["/bin/sh", "-c"]
+
+# Install tini init process for zombie reaping (not available in EPEL 10)
+ARG TINI_VERSION=v0.19.0
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) TINI_ARCH="amd64" ;; \
+        aarch64) TINI_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-${TINI_ARCH}" \
+        -o /usr/local/bin/tini && \
+    chmod +x /usr/local/bin/tini && \
+    tini --version
 
 # Install pre-commit for automatic hook support in git-synced repos
 RUN pip3.12 install pre-commit
