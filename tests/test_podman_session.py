@@ -1883,6 +1883,40 @@ class TestPodmanBackendSyncHostConfig:
         assert len(cp_calls) == 1
         assert "paude-test:/credentials/cursor-auth.json" in str(cp_calls[0])
 
+    def test_sync_logs_warning_when_step_fails(self, tmp_path: Path, capsys) -> None:
+        """Sync logs a warning when a podman sync step fails."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+
+        def run_side_effect(*args, **kwargs):
+            if args[:7] == (
+                "exec",
+                "--user",
+                "root",
+                "paude-test",
+                "mkdir",
+                "-p",
+                "/credentials",
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="boom")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_runner.engine.run.side_effect = run_side_effect
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+            backend._sync_host_config("paude-test", "claude")
+
+        captured = capsys.readouterr()
+        assert (
+            "Warning: podman config sync step failed "
+            "(create credentials directory): boom"
+        ) in captured.err
+
     def test_start_session_calls_sync(self) -> None:
         """start_session calls _sync_host_config before attach."""
         mock_runner = MagicMock()

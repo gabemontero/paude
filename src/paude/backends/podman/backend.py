@@ -137,21 +137,33 @@ class PodmanBackend:
         home = Path.home()
         config_path = "/credentials"
 
+        def run_step(*args: str, context: str) -> bool:
+            result = self._engine.run(*args, check=False)
+            if result.returncode != 0:
+                stderr = (result.stderr or "").strip()
+                detail = f": {stderr}" if stderr else ""
+                print(
+                    f"Warning: podman config sync step failed ({context}){detail}",
+                    file=sys.stderr,
+                )
+                return False
+            return True
+
         # Ensure /credentials/ directory exists and is writable by paude user
-        self._engine.run(
-            "exec", "--user", "root", cname,
-            "mkdir", "-p", config_path, check=False,
+        run_step(
+            "exec", "--user", "root", cname, "mkdir", "-p", config_path,
+            context="create credentials directory",
         )
-        self._engine.run(
-            "exec", "--user", "root", cname,
-            "chown", "paude:0", config_path, check=False,
+        run_step(
+            "exec", "--user", "root", cname, "chown", "paude:0", config_path,
+            context="set credentials directory ownership",
         )
 
         # Create agent subdirectory
         agent_path = f"{config_path}/{agent_name}"
-        self._engine.run(
-            "exec", "--user", "root", cname,
-            "mkdir", "-p", agent_path, check=False,
+        run_step(
+            "exec", "--user", "root", cname, "mkdir", "-p", agent_path,
+            context="create agent credentials directory",
         )
 
         # Copy agent config directory
@@ -162,17 +174,15 @@ class PodmanBackend:
                 for filename in agent.config.config_sync_files_only:
                     filepath = config_dir / filename
                     if filepath.exists():
-                        self._engine.run(
-                            "cp", str(filepath),
-                            f"{cname}:{agent_path}/{filename}",
-                            check=False,
+                        run_step(
+                            "cp", str(filepath), f"{cname}:{agent_path}/{filename}",
+                            context=f"copy agent config file {filename}",
                         )
             else:
                 # Copy entire config directory contents
-                self._engine.run(
-                    "cp", f"{config_dir}/.",
-                    f"{cname}:{agent_path}",
-                    check=False,
+                run_step(
+                    "cp", f"{config_dir}/.", f"{cname}:{agent_path}",
+                    context="copy agent config directory",
                 )
 
         # Copy agent config file (e.g., .claude.json -> claude/claude.json)
@@ -180,29 +190,26 @@ class PodmanBackend:
             config_file = home / agent.config.config_file_name
             if config_file.is_file():
                 basename = config_file_basename(agent.config.config_file_name)
-                self._engine.run(
-                    "cp", str(config_file),
-                    f"{cname}:{agent_path}/{basename}",
-                    check=False,
+                run_step(
+                    "cp", str(config_file), f"{cname}:{agent_path}/{basename}",
+                    context=f"copy agent config file {agent.config.config_file_name}",
                 )
 
         # Copy cursor auth.json separately (like OpenShift sync)
         if agent_name == "cursor":
             auth_json = home / ".config" / "cursor" / "auth.json"
             if auth_json.is_file():
-                self._engine.run(
-                    "cp", str(auth_json),
-                    f"{cname}:{config_path}/cursor-auth.json",
-                    check=False,
+                run_step(
+                    "cp", str(auth_json), f"{cname}:{config_path}/cursor-auth.json",
+                    context="copy cursor auth.json",
                 )
 
         # Copy gitconfig
         gitconfig = home / ".gitconfig"
         if gitconfig.is_file():
-            self._engine.run(
-                "cp", str(gitconfig),
-                f"{cname}:{config_path}/gitconfig",
-                check=False,
+            run_step(
+                "cp", str(gitconfig), f"{cname}:{config_path}/gitconfig",
+                context="copy gitconfig",
             )
 
         # Rewrite host home paths in plugin JSON files so Claude Code can
@@ -210,24 +217,49 @@ class PodmanBackend:
         host_home = str(home)
         container_home = CONTAINER_HOME
         if host_home != container_home:
-            self._engine.run(
-                "exec", "--user", "root", cname,
-                "sed", "-i", f"s|{host_home}|{container_home}|g",
+            plugin_files = [
                 f"{agent_path}/plugins/installed_plugins.json",
                 f"{agent_path}/plugins/known_marketplaces.json",
-                check=False,
-            )
+            ]
+            for plugin_file in plugin_files:
+                exists = run_step(
+                    "exec", "--user", "root", cname, "test", "-f", plugin_file,
+                    context=f"check plugin file exists: {plugin_file}",
+                )
+                if not exists:
+                    continue
+
+                python_script = (
+                    "from pathlib import Path\n"
+                    "p = Path(__import__('sys').argv[1])\n"
+                    "old = __import__('sys').argv[2]\n"
+                    "new = __import__('sys').argv[3]\n"
+                    "p.write_text(p.read_text().replace(old, new))\n"
+                )
+                run_step(
+                    "exec",
+                    "--user",
+                    "root",
+                    cname,
+                    "python3",
+                    "-c",
+                    python_script,
+                    plugin_file,
+                    host_home,
+                    container_home,
+                    context=f"rewrite plugin home paths in {plugin_file}",
+                )
 
         # Ensure everything is readable by paude user
-        self._engine.run(
-            "exec", "--user", "root", cname,
-            "chown", "-R", "paude:0", config_path, check=False,
+        run_step(
+            "exec", "--user", "root", cname, "chown", "-R", "paude:0", config_path,
+            context="set credentials ownership recursively",
         )
 
         # Mark ready so entrypoint's wait_for_credentials() proceeds
-        self._engine.run(
-            "exec", "--user", "root", cname,
-            "touch", f"{config_path}/.ready", check=False,
+        run_step(
+            "exec", "--user", "root", cname, "touch", f"{config_path}/.ready",
+            context="create credentials ready marker",
         )
 
     @staticmethod
