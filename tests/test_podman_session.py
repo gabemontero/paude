@@ -56,10 +56,12 @@ def _make_backend(
             mock_runner.engine.binary = "podman"
             mock_runner.engine.supports_multi_network_create = True
             mock_runner.engine.default_bridge_network = "podman"
+            mock_runner.engine.is_remote = False
             mock_runner.engine.run.return_value = MagicMock(
                 returncode=0, stdout="", stderr=""
             )
         backend._runner = mock_runner
+        backend._engine = mock_runner.engine
     if mock_network_manager is not None:
         backend._network_manager = mock_network_manager
     # Always mock volume manager to prevent real podman calls
@@ -1735,7 +1737,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             claude_dir = tmp_path / ".claude"
             claude_dir.mkdir()
             (claude_dir / "settings.json").write_text("{}")
@@ -1762,7 +1764,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             (tmp_path / ".gitconfig").write_text("[user]\n  name = Test\n")
 
             backend._sync_host_config("paude-test", "claude")
@@ -1789,7 +1791,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             backend._sync_host_config("paude-test", "claude")
 
         # Should have called exec touch /credentials/.ready
@@ -1815,7 +1817,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             (tmp_path / ".claude").mkdir()
             (tmp_path / ".gitconfig").write_text("[user]\n  name = Test\n")
 
@@ -1837,7 +1839,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             (tmp_path / ".claude.json").write_text("{}")
 
             backend._sync_host_config("paude-test", "claude")
@@ -1866,7 +1868,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             cursor_config = tmp_path / ".config" / "cursor"
             cursor_config.mkdir(parents=True)
             (cursor_config / "auth.json").write_text("{}")
@@ -1908,7 +1910,7 @@ class TestPodmanBackendSyncHostConfig:
         backend = _make_backend(mock_runner)
         backend._engine = mock_runner.engine
 
-        with patch("paude.backends.podman.backend.Path.home", return_value=tmp_path):
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
             backend._sync_host_config("paude-test", "claude")
 
         captured = capsys.readouterr()

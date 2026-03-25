@@ -6,8 +6,8 @@ import os
 import sys
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
 
-from paude.agents import get_agent
 from paude.backends.openshift.exceptions import OcTimeoutError, OpenShiftError
 from paude.backends.openshift.oc import (
     OC_EXEC_TIMEOUT,
@@ -15,11 +15,14 @@ from paude.backends.openshift.oc import (
     RSYNC_TIMEOUT,
     OcClient,
 )
-from paude.backends.shared import config_file_basename
+from paude.backends.sync_base import CONFIG_PATH, BaseConfigSyncer
 from paude.constants import CONTAINER_HOME, GCP_ADC_FILENAME
 
+if TYPE_CHECKING:
+    from paude.agents.base import Agent
 
-class ConfigSyncer:
+
+class ConfigSyncer(BaseConfigSyncer):
     """Handles configuration and credential synchronization to OpenShift pods.
 
     This class is responsible for syncing local configuration files
@@ -35,6 +38,107 @@ class ConfigSyncer:
         """
         self._oc = oc
         self._namespace = namespace
+        self._target = ""
+
+    # -- BaseConfigSyncer transport implementation -------------------------
+
+    def _copy_file(
+        self, local_path: str, container_path: str, *, context: str
+    ) -> bool:
+        try:
+            self._oc.run(
+                "cp",
+                local_path,
+                f"{self._target}:{container_path}",
+                "-n",
+                self._namespace,
+                check=False,
+            )
+            return True
+        except Exception:  # noqa: S110
+            return False
+
+    def _copy_dir(
+        self,
+        local_dir: str,
+        container_path: str,
+        *,
+        excludes: list[str] | None = None,
+        context: str,
+    ) -> bool:
+        exclude_args: list[str] = []
+        if excludes:
+            for pattern in excludes:
+                exclude_args.extend(["--exclude", pattern])
+
+        success = self.rsync_with_retry(
+            f"{local_dir}/",
+            f"{self._target}:{container_path}",
+            exclude_args,
+        )
+        if not success:
+            print(
+                f"  Warning: Failed to sync {local_dir}/"
+                " - plugins may not work",
+                file=sys.stderr,
+            )
+        return success
+
+    def _rewrite_plugin_paths(
+        self, agent_path: str, agent: Agent, home: Path
+    ) -> None:
+        config_dir_name = agent.config.config_dir_name
+        container_plugins_path = f"{CONTAINER_HOME}/{config_dir_name}/plugins"
+
+        installed_plugins = f"{agent_path}/plugins/installed_plugins.json"
+        jq_expr = (
+            ".plugins |= with_entries(.value |= map("
+            "if .installPath then "
+            '.installPath = ($prefix + "/" + '
+            '(.installPath | split("/") | .[-3:] | join("/"))) '
+            "else . end))"
+        )
+        self._oc.run(
+            "exec",
+            self._target,
+            "-n",
+            self._namespace,
+            "--",
+            "bash",
+            "-c",
+            f'if [ -f "{installed_plugins}" ]; then '
+            f"jq --arg prefix \"{container_plugins_path}/cache\" '{jq_expr}' "
+            f'"{installed_plugins}" > "{installed_plugins}.tmp" && '
+            f'mv "{installed_plugins}.tmp" "{installed_plugins}"; fi',
+            check=False,
+            timeout=OC_EXEC_TIMEOUT,
+        )
+
+        known_marketplaces = (
+            f"{agent_path}/plugins/known_marketplaces.json"
+        )
+        jq_expr2 = (
+            "with_entries(if .value.installLocation then "
+            '.value.installLocation = ($prefix + "/marketplaces/" + .key) '
+            "else . end)"
+        )
+        self._oc.run(
+            "exec",
+            self._target,
+            "-n",
+            self._namespace,
+            "--",
+            "bash",
+            "-c",
+            f'if [ -f "{known_marketplaces}" ]; then '
+            f"jq --arg prefix \"{container_plugins_path}\" '{jq_expr2}' "
+            f'"{known_marketplaces}" > "{known_marketplaces}.tmp" && '
+            f'mv "{known_marketplaces}.tmp" "{known_marketplaces}"; fi',
+            check=False,
+            timeout=OC_EXEC_TIMEOUT,
+        )
+
+    # -- OpenShift-specific public API -------------------------------------
 
     def rsync_with_retry(
         self,
@@ -109,7 +213,6 @@ class ConfigSyncer:
         Returns True if /credentials/.ready exists, indicating a previous
         full config sync.
         """
-        config_path = "/credentials"
         result = self._oc.run(
             "exec",
             pod_name,
@@ -118,84 +221,46 @@ class ConfigSyncer:
             "--",
             "test",
             "-f",
-            f"{config_path}/.ready",
+            f"{CONFIG_PATH}/.ready",
             check=False,
             timeout=OC_EXEC_TIMEOUT,
         )
         return result.returncode == 0
 
-    def _cp_content_to_pod(self, pod_name: str, content: str, dest_path: str) -> None:
-        """Write content to a tempfile and copy it to the pod via ``oc cp``."""
-        try:
-            with tempfile.NamedTemporaryFile(mode="w", suffix=".secret") as tmp:
-                tmp.write(content)
-                tmp.flush()
-                self._oc.run(
-                    "cp",
-                    tmp.name,
-                    f"{pod_name}:{dest_path}",
-                    "-n",
-                    self._namespace,
-                    check=False,
-                )
-        except Exception:  # noqa: S110
-            pass
+    def sync_full_config(
+        self,
+        pod_name: str,
+        verbose: bool = False,
+        github_token: str | None = None,
+        agent_name: str = "claude",
+        secret_env: dict[str, str] | None = None,
+    ) -> None:
+        """Sync all configuration to pod /credentials/ directory.
 
-    def _sync_secret_env_vars(self, pod_name: str, secret_env: dict[str, str]) -> None:
-        """Sync secret environment variables to /credentials/env/ on the pod.
-
-        Each variable is written to a tempfile and copied via ``oc cp`` to
-        ``/credentials/env/<VAR_NAME>``. The entrypoint reads these files and
-        exports them, keeping secrets out of the StatefulSet spec.
-        """
-        if not secret_env:
-            return
-
-        config_path = "/credentials"
-        self._oc.run(
-            "exec",
-            pod_name,
-            "-n",
-            self._namespace,
-            "--",
-            "mkdir",
-            "-p",
-            f"{config_path}/env",
-            check=False,
-            timeout=OC_EXEC_TIMEOUT,
-        )
-
-        for var_name, value in secret_env.items():
-            self._cp_content_to_pod(pod_name, value, f"{config_path}/env/{var_name}")
-
-    def _sync_github_token(self, pod_name: str, github_token: str | None) -> None:
-        """Sync GitHub token to the pod's credentials directory.
+        Full sync including gcloud credentials, agent config, gitconfig,
+        global gitignore, optional GitHub token, and secret env vars.
 
         Args:
             pod_name: Name of the pod to sync to.
-            github_token: Token value, or None to read from PAUDE_GITHUB_TOKEN env.
+            verbose: Whether to show sync progress.
+            github_token: Optional GitHub token to inject into pod tmpfs.
+                Falls back to PAUDE_GITHUB_TOKEN env var if not provided.
+            agent_name: Agent name for config directory naming.
+            secret_env: Secret environment variables to sync to tmpfs.
         """
-        token = github_token or os.environ.get("PAUDE_GITHUB_TOKEN")
-        if not token:
-            return
+        self._target = pod_name
 
-        self._cp_content_to_pod(pod_name, token, "/credentials/github_token")
+        print("Syncing configuration to pod...", file=sys.stderr)
 
-    def _sync_cursor_auth_json(self, pod_name: str) -> None:
-        """Sync Cursor auth.json from ~/.config/cursor/ to /credentials/."""
-        auth_json = Path.home() / ".config" / "cursor" / "auth.json"
-        if auth_json.is_file():
-            try:
-                self._oc.run(
-                    "cp",
-                    str(auth_json),
-                    f"{pod_name}:/credentials/cursor-auth.json",
-                    "-n",
-                    self._namespace,
-                    check=False,
-                )
-            except Exception:  # noqa: S110
-                pass
+        self._prepare_config_directory(agent_name=agent_name)
+        self._sync_gcloud_credentials()
+        self._sync_config_files(agent_name)
+        self._sync_global_gitignore()
+        self._sync_github_token(github_token)
+        self._sync_secret_env_vars(secret_env or {})
+        self._finalize_sync()
+
+        print("Configuration synced.", file=sys.stderr)
 
     def sync_credentials(
         self,
@@ -219,8 +284,8 @@ class ConfigSyncer:
             secret_env: Secret environment variables to sync to tmpfs.
             agent_name: Agent name (used for agent-specific credential sync).
         """
+        self._target = pod_name
         home = Path.home()
-        config_path = "/credentials"
 
         print("Refreshing credentials...", file=sys.stderr)
 
@@ -230,27 +295,20 @@ class ConfigSyncer:
             "credentials.db",
             "access_tokens.db",
         ]
-        gcloud_dest = f"{pod_name}:{config_path}/gcloud"
         for filename in gcloud_files:
             filepath = gcloud_dir / filename
             if filepath.exists():
-                try:
-                    self._oc.run(
-                        "cp",
-                        str(filepath),
-                        f"{gcloud_dest}/{filename}",
-                        "-n",
-                        self._namespace,
-                        check=False,
-                    )
-                except Exception:  # noqa: S110
-                    pass
+                self._copy_file(
+                    str(filepath),
+                    f"{CONFIG_PATH}/gcloud/{filename}",
+                    context=f"refresh gcloud {filename}",
+                )
 
-        self._sync_github_token(pod_name, github_token)
-        self._sync_secret_env_vars(pod_name, secret_env or {})
+        self._sync_github_token(github_token)
+        self._sync_secret_env_vars(secret_env or {})
 
         if agent_name == "cursor":
-            self._sync_cursor_auth_json(pod_name)
+            self._sync_cursor_auth(home)
 
         self._oc.run(
             "exec",
@@ -259,7 +317,7 @@ class ConfigSyncer:
             self._namespace,
             "--",
             "touch",
-            f"{config_path}/.ready",
+            f"{CONFIG_PATH}/.ready",
             check=False,
             timeout=OC_EXEC_TIMEOUT,
         )
@@ -268,21 +326,66 @@ class ConfigSyncer:
             print("  Refreshed gcloud credentials", file=sys.stderr)
         print("Credentials refreshed.", file=sys.stderr)
 
-    def _prepare_config_directory(
-        self, pod_name: str, agent_name: str = "claude"
-    ) -> None:
+    # -- OpenShift-specific internal methods --------------------------------
+
+    def _cp_content_to_pod(self, content: str, dest_path: str) -> None:
+        """Write content to a tempfile and copy it to the pod via ``oc cp``."""
+        try:
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".secret") as tmp:
+                tmp.write(content)
+                tmp.flush()
+                self._oc.run(
+                    "cp",
+                    tmp.name,
+                    f"{self._target}:{dest_path}",
+                    "-n",
+                    self._namespace,
+                    check=False,
+                )
+        except Exception:  # noqa: S110
+            pass
+
+    def _sync_secret_env_vars(self, secret_env: dict[str, str]) -> None:
+        """Sync secret environment variables to /credentials/env/ on the pod."""
+        if not secret_env:
+            return
+
+        self._oc.run(
+            "exec",
+            self._target,
+            "-n",
+            self._namespace,
+            "--",
+            "mkdir",
+            "-p",
+            f"{CONFIG_PATH}/env",
+            check=False,
+            timeout=OC_EXEC_TIMEOUT,
+        )
+
+        for var_name, value in secret_env.items():
+            self._cp_content_to_pod(value, f"{CONFIG_PATH}/env/{var_name}")
+
+    def _sync_github_token(self, github_token: str | None) -> None:
+        """Sync GitHub token to the pod's credentials directory."""
+        token = github_token or os.environ.get("PAUDE_GITHUB_TOKEN")
+        if not token:
+            return
+
+        self._cp_content_to_pod(token, f"{CONFIG_PATH}/github_token")
+
+    def _prepare_config_directory(self, agent_name: str = "claude") -> None:
         """Prepare the config directory on the pod."""
-        config_path = "/credentials"
         prep_result = self._oc.run(
             "exec",
-            pod_name,
+            self._target,
             "-n",
             self._namespace,
             "--",
             "bash",
             "-c",
-            f"mkdir -p {config_path}/gcloud {config_path}/{agent_name} && "
-            f"(chmod -R g+rwX {config_path} 2>/dev/null || true)",
+            f"mkdir -p {CONFIG_PATH}/gcloud {CONFIG_PATH}/{agent_name} && "
+            f"(chmod -R g+rwX {CONFIG_PATH} 2>/dev/null || true)",
             check=False,
             timeout=OC_EXEC_TIMEOUT,
         )
@@ -291,305 +394,66 @@ class ConfigSyncer:
                 f"Failed to prepare config directory: {prep_result.stderr}"
             )
 
-    def _sync_gcloud_credentials(self, pod_name: str) -> None:
+    def _sync_gcloud_credentials(self) -> None:
         """Sync gcloud credentials to the pod."""
         home = Path.home()
-        config_path = "/credentials"
         gcloud_dir = home / ".config" / "gcloud"
         gcloud_files = [
             GCP_ADC_FILENAME,
             "credentials.db",
             "access_tokens.db",
         ]
-        gcloud_dest = f"{pod_name}:{config_path}/gcloud"
         for filename in gcloud_files:
             filepath = gcloud_dir / filename
             if filepath.exists():
-                try:
-                    self._oc.run(
-                        "cp",
-                        str(filepath),
-                        f"{gcloud_dest}/{filename}",
-                        "-n",
-                        self._namespace,
-                        check=False,
-                    )
-                except Exception:  # noqa: S110
-                    pass
-
-    def _sync_agent_config(
-        self,
-        pod_name: str,
-        verbose: bool = False,
-        agent_name: str = "claude",
-    ) -> bool:
-        """Sync agent config directory to the pod.
-
-        Returns True if sync succeeded.
-        """
-        home = Path.home()
-        config_path = "/credentials"
-        agent = get_agent(agent_name)
-        config_dir = home / agent.config.config_dir_name
-        config_file = (
-            home / agent.config.config_file_name
-            if agent.config.config_file_name
-            else None
-        )
-
-        if config_dir.is_dir():
-            if agent.config.config_sync_files_only:
-                # Only copy specific files instead of rsyncing the entire directory
-                for filename in agent.config.config_sync_files_only:
-                    filepath = config_dir / filename
-                    try:
-                        self._oc.run(
-                            "cp",
-                            str(filepath),
-                            f"{pod_name}:{config_path}/{agent_name}/{filename}",
-                            "-n",
-                            self._namespace,
-                            check=False,
-                        )
-                    except Exception:  # noqa: S110
-                        pass
-                if verbose:
-                    cfg_dir = agent.config.config_dir_name
-                    files = ", ".join(agent.config.config_sync_files_only)
-                    print(
-                        f"  Synced ~/{cfg_dir}/ ({files} only)",
-                        file=sys.stderr,
-                    )
-            else:
-                exclude_args = []
-                for pattern in agent.config.config_excludes:
-                    exclude_args.extend(["--exclude", pattern])
-
-                rsync_success = self.rsync_with_retry(
-                    f"{config_dir}/",
-                    f"{pod_name}:{config_path}/{agent_name}",
-                    exclude_args,
-                    verbose=verbose,
+                self._copy_file(
+                    str(filepath),
+                    f"{CONFIG_PATH}/gcloud/{filename}",
+                    context=f"sync gcloud {filename}",
                 )
 
-                if rsync_success:
-                    self._rewrite_plugin_paths(
-                        pod_name,
-                        config_path,
-                        agent_name=agent_name,
-                        config_dir_name=agent.config.config_dir_name,
-                    )
-                    if verbose:
-                        cfg_dir = agent.config.config_dir_name
-                        print(
-                            f"  Synced ~/{cfg_dir}/ (including plugins)",
-                            file=sys.stderr,
-                        )
-                else:
-                    cfg_dir = agent.config.config_dir_name
-                    print(
-                        f"  Warning: Failed to sync ~/{cfg_dir}/"
-                        " - plugins may not work",
-                        file=sys.stderr,
-                    )
-                    return False
-
-        # Sync Cursor auth.json from ~/.config/cursor/ (separate from ~/.cursor/)
-        if agent_name == "cursor":
-            self._sync_cursor_auth_json(pod_name)
-
-        if config_file and config_file.exists():
-            try:
-                basename = (
-                    config_file_basename(agent.config.config_file_name)
-                    if agent.config.config_file_name
-                    else ""
-                )
-                dest = f"{pod_name}:{config_path}/{agent_name}/{basename}"
-                self._oc.run(
-                    "cp",
-                    str(config_file),
-                    dest,
-                    "-n",
-                    self._namespace,
-                    check=False,
-                )
-            except Exception:  # noqa: S110
-                pass
-
-        return True
-
-    def _sync_gitconfig(self, pod_name: str, verbose: bool = False) -> None:
-        """Sync gitconfig to the pod."""
-        home = Path.home()
-        config_path = "/credentials"
-        gitconfig = home / ".gitconfig"
-        if gitconfig.exists():
-            try:
-                self._oc.run(
-                    "cp",
-                    str(gitconfig),
-                    f"{pod_name}:{config_path}/gitconfig",
-                    "-n",
-                    self._namespace,
-                    check=False,
-                )
-                if verbose:
-                    print("  Synced ~/.gitconfig", file=sys.stderr)
-            except Exception:  # noqa: S110
-                pass
-
-    def _sync_global_gitignore(self, pod_name: str, verbose: bool = False) -> None:
+    def _sync_global_gitignore(self) -> None:
         """Sync global gitignore to the pod."""
         home = Path.home()
-        config_path = "/credentials"
         global_gitignore = home / ".config" / "git" / "ignore"
         if global_gitignore.exists():
-            try:
-                self._oc.run(
-                    "cp",
-                    str(global_gitignore),
-                    f"{pod_name}:{config_path}/gitignore-global",
-                    "-n",
-                    self._namespace,
-                    check=False,
-                )
-                if verbose:
-                    print(
-                        "  Synced ~/.config/git/ignore (global gitignore)",
-                        file=sys.stderr,
-                    )
-            except Exception:  # noqa: S110
-                pass
+            self._copy_file(
+                str(global_gitignore),
+                f"{CONFIG_PATH}/gitignore-global",
+                context="sync global gitignore",
+            )
 
-    def _finalize_sync(self, pod_name: str) -> None:
+    def _finalize_sync(self) -> None:
         """Finalize sync by setting permissions and creating .ready marker."""
-        config_path = "/credentials"
         self._oc.run(
             "exec",
-            pod_name,
+            self._target,
             "-n",
             self._namespace,
             "--",
             "bash",
             "-c",
-            f"(chmod -R g+rX {config_path} 2>/dev/null || true) && "
-            f"touch {config_path}/.ready && "
-            f"chmod g+r {config_path}/.ready",
+            f"(chmod -R g+rX {CONFIG_PATH} 2>/dev/null || true) && "
+            f"touch {CONFIG_PATH}/.ready && "
+            f"chmod g+r {CONFIG_PATH}/.ready",
             check=False,
             timeout=OC_EXEC_TIMEOUT,
         )
 
         verify_result = self._oc.run(
             "exec",
-            pod_name,
+            self._target,
             "-n",
             self._namespace,
             "--",
             "test",
             "-f",
-            f"{config_path}/.ready",
+            f"{CONFIG_PATH}/.ready",
             check=False,
             timeout=OC_EXEC_TIMEOUT,
         )
         if verify_result.returncode != 0:
             print(
-                f"Warning: Failed to create {config_path}/.ready marker",
+                f"Warning: Failed to create {CONFIG_PATH}/.ready marker",
                 file=sys.stderr,
             )
-
-    def sync_full_config(
-        self,
-        pod_name: str,
-        verbose: bool = False,
-        github_token: str | None = None,
-        agent_name: str = "claude",
-        secret_env: dict[str, str] | None = None,
-    ) -> None:
-        """Sync all configuration to pod /credentials/ directory.
-
-        Full sync including gcloud credentials, agent config, gitconfig,
-        global gitignore, optional GitHub token, and secret env vars.
-
-        Args:
-            pod_name: Name of the pod to sync to.
-            verbose: Whether to show sync progress.
-            github_token: Optional GitHub token to inject into pod tmpfs.
-                Falls back to PAUDE_GITHUB_TOKEN env var if not provided.
-            agent_name: Agent name for config directory naming.
-            secret_env: Secret environment variables to sync to tmpfs.
-        """
-        print("Syncing configuration to pod...", file=sys.stderr)
-
-        self._prepare_config_directory(pod_name, agent_name=agent_name)
-        self._sync_gcloud_credentials(pod_name)
-        self._sync_agent_config(pod_name, verbose=verbose, agent_name=agent_name)
-        self._sync_gitconfig(pod_name, verbose=verbose)
-        self._sync_global_gitignore(pod_name, verbose=verbose)
-        self._sync_github_token(pod_name, github_token)
-        self._sync_secret_env_vars(pod_name, secret_env or {})
-        self._finalize_sync(pod_name)
-
-        print("Configuration synced.", file=sys.stderr)
-
-    def _rewrite_plugin_paths(
-        self,
-        pod_name: str,
-        config_path: str,
-        agent_name: str = "claude",
-        config_dir_name: str = ".claude",
-    ) -> None:
-        """Rewrite absolute paths in plugin metadata files using jq.
-
-        Agent tools write plugin paths as absolute host paths. These need
-        to be rewritten to container paths.
-        """
-        container_plugins_path = f"{CONTAINER_HOME}/{config_dir_name}/plugins"
-
-        installed_plugins = f"{config_path}/{agent_name}/plugins/installed_plugins.json"
-        jq_expr = (
-            ".plugins |= with_entries(.value |= map("
-            "if .installPath then "
-            '.installPath = ($prefix + "/" + '
-            '(.installPath | split("/") | .[-3:] | join("/"))) '
-            "else . end))"
-        )
-        self._oc.run(
-            "exec",
-            pod_name,
-            "-n",
-            self._namespace,
-            "--",
-            "bash",
-            "-c",
-            f'if [ -f "{installed_plugins}" ]; then '
-            f"jq --arg prefix \"{container_plugins_path}/cache\" '{jq_expr}' "
-            f'"{installed_plugins}" > "{installed_plugins}.tmp" && '
-            f'mv "{installed_plugins}.tmp" "{installed_plugins}"; fi',
-            check=False,
-            timeout=OC_EXEC_TIMEOUT,
-        )
-
-        known_marketplaces = (
-            f"{config_path}/{agent_name}/plugins/known_marketplaces.json"
-        )
-        jq_expr2 = (
-            "with_entries(if .value.installLocation then "
-            '.value.installLocation = ($prefix + "/marketplaces/" + .key) '
-            "else . end)"
-        )
-        self._oc.run(
-            "exec",
-            pod_name,
-            "-n",
-            self._namespace,
-            "--",
-            "bash",
-            "-c",
-            f'if [ -f "{known_marketplaces}" ]; then '
-            f"jq --arg prefix \"{container_plugins_path}\" '{jq_expr2}' "
-            f'"{known_marketplaces}" > "{known_marketplaces}.tmp" && '
-            f'mv "{known_marketplaces}.tmp" "{known_marketplaces}"; fi',
-            check=False,
-            timeout=OC_EXEC_TIMEOUT,
-        )

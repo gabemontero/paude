@@ -2297,10 +2297,10 @@ class TestSyncCursorAuthJson:
     """Tests for Cursor auth.json sync in ConfigSyncer."""
 
     @patch("subprocess.run")
-    def test_sync_agent_config_syncs_auth_json_for_cursor(
+    def test_sync_config_files_syncs_auth_json_for_cursor(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_agent_config syncs auth.json for cursor agent."""
+        """_sync_config_files syncs auth.json for cursor agent."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create fake cursor config and auth.json
@@ -2312,9 +2312,10 @@ class TestSyncCursorAuthJson:
         (config_cursor / "auth.json").write_text('{"accessToken": "test"}')
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
+        backend._syncer._target = "test-pod-0"
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._syncer._sync_agent_config("test-pod-0", agent_name="cursor")
+            backend._syncer._sync_config_files("cursor")
 
         # Verify oc cp was called for cursor-auth.json
         cp_calls = [c for c in mock_run.call_args_list if "cp" in str(c)]
@@ -2322,10 +2323,10 @@ class TestSyncCursorAuthJson:
         assert len(auth_cp_calls) >= 1
 
     @patch("subprocess.run")
-    def test_sync_agent_config_does_not_sync_auth_json_for_claude(
+    def test_sync_config_files_does_not_sync_auth_json_for_claude(
         self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_sync_agent_config does NOT sync auth.json for non-cursor agents."""
+        """_sync_config_files does NOT sync auth.json for non-cursor agents."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create fake claude config
@@ -2338,9 +2339,10 @@ class TestSyncCursorAuthJson:
         (config_cursor / "auth.json").write_text('{"accessToken": "test"}')
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
+        backend._syncer._target = "test-pod-0"
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            backend._syncer._sync_agent_config("test-pod-0", agent_name="claude")
+            backend._syncer._sync_config_files("claude")
 
         # Verify cursor-auth.json was NOT synced
         all_calls_str = str(mock_run.call_args_list)
@@ -2576,10 +2578,10 @@ class TestSyncConfigToPod:
         assert "gitignore-global" not in cp_calls_str
 
     @patch("subprocess.run")
-    def test_verbose_output_for_global_gitignore(
-        self, mock_run: MagicMock, tmp_path: Path, capsys: Any
+    def test_sync_full_config_copies_global_gitignore(
+        self, mock_run: MagicMock, tmp_path: Path
     ) -> None:
-        """_syncer.sync_full_config prints verbose output for global gitignore."""
+        """_syncer.sync_full_config copies global gitignore."""
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
 
         # Create mock global gitignore
@@ -2590,10 +2592,11 @@ class TestSyncConfigToPod:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch.object(Path, "home", return_value=tmp_path):
-            backend._syncer.sync_full_config("test-pod-0", verbose=True)
+            backend._syncer.sync_full_config("test-pod-0")
 
-        captured = capsys.readouterr()
-        assert "global gitignore" in captured.err
+        # Verify oc cp was called for gitignore-global
+        cp_calls = [c for c in mock_run.call_args_list if "gitignore-global" in str(c)]
+        assert len(cp_calls) >= 1
 
     @patch("subprocess.run")
     def test_creates_ready_marker(self, mock_run: MagicMock, tmp_path: Path) -> None:
@@ -2786,15 +2789,9 @@ class TestSyncConfigWithPlugins:
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
 
         with patch("pathlib.Path.home", return_value=tmp_path):
-            # Patch the syncer's method since sync is now delegated to ConfigSyncer
             with patch.object(backend._syncer, "_rewrite_plugin_paths") as mock_rewrite:
                 backend._syncer.sync_full_config("test-pod-0")
-                mock_rewrite.assert_called_once_with(
-                    "test-pod-0",
-                    "/credentials",
-                    agent_name="claude",
-                    config_dir_name=".claude",
-                )
+                mock_rewrite.assert_called_once()
 
     @patch("subprocess.run")
     def test_sync_config_handles_missing_claude_dir(
@@ -2881,12 +2878,19 @@ class TestSyncConfigWithPlugins:
             backend._syncer.sync_full_config("test-pod-0")
 
         captured = capsys.readouterr()
-        assert "Warning: Failed to sync ~/.claude/" in captured.err
+        assert "Failed to sync" in captured.err
         assert "plugins may not work" in captured.err
 
 
 class TestRewritePluginPaths:
     """Tests for _rewrite_plugin_paths method."""
+
+    @staticmethod
+    def _make_claude_agent() -> Any:
+        """Create a claude agent for testing _rewrite_plugin_paths."""
+        from paude.agents import get_agent
+
+        return get_agent("claude")
 
     @patch("subprocess.run")
     def test_rewrite_plugin_paths_uses_jq(self, mock_run: MagicMock) -> None:
@@ -2896,9 +2900,13 @@ class TestRewritePluginPaths:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = mock_run_side_effect
+        agent = self._make_claude_agent()
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._target = "test-pod-0"
+        backend._syncer._rewrite_plugin_paths(
+            "/credentials/claude", agent, Path.home()
+        )
 
         # Find exec calls with jq
         jq_calls = [
@@ -2920,9 +2928,13 @@ class TestRewritePluginPaths:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = mock_run_side_effect
+        agent = self._make_claude_agent()
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._target = "test-pod-0"
+        backend._syncer._rewrite_plugin_paths(
+            "/credentials/claude", agent, Path.home()
+        )
 
         # Check for installed_plugins.json rewrite
         installed_plugins_calls = [
@@ -2946,9 +2958,13 @@ class TestRewritePluginPaths:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = mock_run_side_effect
+        agent = self._make_claude_agent()
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._target = "test-pod-0"
+        backend._syncer._rewrite_plugin_paths(
+            "/credentials/claude", agent, Path.home()
+        )
 
         # Check that the container path is used
         all_calls_str = str(mock_run.call_args_list)
@@ -2964,9 +2980,13 @@ class TestRewritePluginPaths:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = mock_run_side_effect
+        agent = self._make_claude_agent()
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._target = "test-pod-0"
+        backend._syncer._rewrite_plugin_paths(
+            "/credentials/claude", agent, Path.home()
+        )
 
         # The jq expression should include null-safety check
         all_calls_str = str(mock_run.call_args_list)
@@ -2983,9 +3003,13 @@ class TestRewritePluginPaths:
             return MagicMock(returncode=0, stdout="", stderr="")
 
         mock_run.side_effect = mock_run_side_effect
+        agent = self._make_claude_agent()
 
         backend = OpenShiftBackend(config=OpenShiftConfig(namespace="test-ns"))
-        backend._syncer._rewrite_plugin_paths("test-pod-0", "/credentials")
+        backend._syncer._target = "test-pod-0"
+        backend._syncer._rewrite_plugin_paths(
+            "/credentials/claude", agent, Path.home()
+        )
 
         # The jq expression for known_marketplaces should include null-safety
         all_calls_str = str(mock_run.call_args_list)

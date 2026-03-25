@@ -30,12 +30,10 @@ from paude.backends.shared import (
     PAUDE_LABEL_SESSION,
     PAUDE_LABEL_WORKSPACE,
     build_session_env,
-    config_file_basename,
     encode_path,
 )
 from paude.constants import (
     CONTAINER_ENTRYPOINT,
-    CONTAINER_HOME,
     CONTAINER_WORKSPACE,
     GCP_ADC_FILENAME,
     GCP_ADC_SECRET_NAME,
@@ -123,144 +121,12 @@ class PodmanBackend:
     def _sync_host_config(self, cname: str, agent_name: str) -> None:
         """Copy host config files into /credentials/ via podman cp.
 
-        Mirrors the OpenShift ConfigSyncer approach: copies agent config,
-        gitconfig, and creates a .ready marker so the entrypoint's
-        setup_credentials() processes them. Skipped for SSH remotes which
-        use bind mounts instead.
+        Delegates to ConfigSyncer which mirrors the OpenShift pattern.
+        Skipped for SSH remotes which use bind mounts instead.
         """
-        if self._engine.is_remote:
-            return
+        from paude.backends.podman.sync import ConfigSyncer
 
-        from paude.agents import get_agent
-
-        agent = get_agent(agent_name)
-        home = Path.home()
-        config_path = "/credentials"
-
-        def run_step(*args: str, context: str) -> bool:
-            result = self._engine.run(*args, check=False)
-            if result.returncode != 0:
-                stderr = (result.stderr or "").strip()
-                detail = f": {stderr}" if stderr else ""
-                print(
-                    f"Warning: podman config sync step failed ({context}){detail}",
-                    file=sys.stderr,
-                )
-                return False
-            return True
-
-        # Ensure /credentials/ directory exists and is writable by paude user
-        run_step(
-            "exec", "--user", "root", cname, "mkdir", "-p", config_path,
-            context="create credentials directory",
-        )
-        run_step(
-            "exec", "--user", "root", cname, "chown", "paude:0", config_path,
-            context="set credentials directory ownership",
-        )
-
-        # Create agent subdirectory
-        agent_path = f"{config_path}/{agent_name}"
-        run_step(
-            "exec", "--user", "root", cname, "mkdir", "-p", agent_path,
-            context="create agent credentials directory",
-        )
-
-        # Copy agent config directory
-        config_dir = home / agent.config.config_dir_name
-        if config_dir.is_dir():
-            if agent.config.config_sync_files_only:
-                # Only copy specific files (e.g., cursor: cli-config.json)
-                for filename in agent.config.config_sync_files_only:
-                    filepath = config_dir / filename
-                    if filepath.exists():
-                        run_step(
-                            "cp", str(filepath), f"{cname}:{agent_path}/{filename}",
-                            context=f"copy agent config file {filename}",
-                        )
-            else:
-                # Copy entire config directory contents
-                run_step(
-                    "cp", f"{config_dir}/.", f"{cname}:{agent_path}",
-                    context="copy agent config directory",
-                )
-
-        # Copy agent config file (e.g., .claude.json -> claude/claude.json)
-        if agent.config.config_file_name:
-            config_file = home / agent.config.config_file_name
-            if config_file.is_file():
-                basename = config_file_basename(agent.config.config_file_name)
-                run_step(
-                    "cp", str(config_file), f"{cname}:{agent_path}/{basename}",
-                    context=f"copy agent config file {agent.config.config_file_name}",
-                )
-
-        # Copy cursor auth.json separately (like OpenShift sync)
-        if agent_name == "cursor":
-            auth_json = home / ".config" / "cursor" / "auth.json"
-            if auth_json.is_file():
-                run_step(
-                    "cp", str(auth_json), f"{cname}:{config_path}/cursor-auth.json",
-                    context="copy cursor auth.json",
-                )
-
-        # Copy gitconfig
-        gitconfig = home / ".gitconfig"
-        if gitconfig.is_file():
-            run_step(
-                "cp", str(gitconfig), f"{cname}:{config_path}/gitconfig",
-                context="copy gitconfig",
-            )
-
-        # Rewrite host home paths in plugin JSON files so Claude Code can
-        # find plugins at the container's home directory instead of the host's
-        host_home = str(home)
-        container_home = CONTAINER_HOME
-        if host_home != container_home:
-            plugin_files = [
-                f"{agent_path}/plugins/installed_plugins.json",
-                f"{agent_path}/plugins/known_marketplaces.json",
-            ]
-            for plugin_file in plugin_files:
-                exists = run_step(
-                    "exec", "--user", "root", cname, "test", "-f", plugin_file,
-                    context=f"check plugin file exists: {plugin_file}",
-                )
-                if not exists:
-                    continue
-
-                python_script = (
-                    "from pathlib import Path\n"
-                    "p = Path(__import__('sys').argv[1])\n"
-                    "old = __import__('sys').argv[2]\n"
-                    "new = __import__('sys').argv[3]\n"
-                    "p.write_text(p.read_text().replace(old, new))\n"
-                )
-                run_step(
-                    "exec",
-                    "--user",
-                    "root",
-                    cname,
-                    "python3",
-                    "-c",
-                    python_script,
-                    plugin_file,
-                    host_home,
-                    container_home,
-                    context=f"rewrite plugin home paths in {plugin_file}",
-                )
-
-        # Ensure everything is readable by paude user
-        run_step(
-            "exec", "--user", "root", cname, "chown", "-R", "paude:0", config_path,
-            context="set credentials ownership recursively",
-        )
-
-        # Mark ready so entrypoint's wait_for_credentials() proceeds
-        run_step(
-            "exec", "--user", "root", cname, "touch", f"{config_path}/.ready",
-            context="create credentials ready marker",
-        )
+        ConfigSyncer(self._engine).sync(cname, agent_name)
 
     @staticmethod
     def _local_adc_path() -> Path | None:
