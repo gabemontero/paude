@@ -30,7 +30,7 @@ fi
 INACTIVITY_THRESHOLD=$((TIMEOUT_MINUTES * 60))
 
 has_tmux_clients() {
-    # The container's init process is sleep infinity (not tmux), so any
+    # The container's init process is tini (not tmux), so any
     # tmux client means a real user is connected.
     local client_count
     local session_name="${PAUDE_AGENT_SESSION_NAME:-claude}"

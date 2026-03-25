@@ -49,6 +49,19 @@ RUN curl -LsSf https://astral.sh/uv/install.sh | UV_INSTALL_DIR=/usr/local/bin s
     && uv --version
 SHELL ["/bin/sh", "-c"]
 
+# Install tini init process for zombie reaping (not available in EPEL 10)
+ARG TINI_VERSION=v0.19.0
+RUN ARCH=$(uname -m) && \
+    case "$ARCH" in \
+        x86_64) TINI_ARCH="amd64" ;; \
+        aarch64) TINI_ARCH="arm64" ;; \
+        *) echo "Unsupported architecture: $ARCH" && exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini-${TINI_ARCH}" \
+        -o /usr/local/bin/tini && \
+    chmod +x /usr/local/bin/tini && \
+    tini --version
+
 # Install pre-commit for automatic hook support in git-synced repos
 RUN pip3.12 install pre-commit
 
