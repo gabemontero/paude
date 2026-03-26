@@ -95,6 +95,12 @@ class PodmanBackend:
             )
         return cname
 
+    def _get_session_agent_name(self, session_name: str) -> str:
+        """Look up the agent name from container labels."""
+        container = find_container_by_session_name(self._runner, session_name)
+        labels = (container.get("Labels", {}) or {}) if container else {}
+        return str(labels.get(PAUDE_LABEL_AGENT, "claude"))
+
     def _build_attach_env(
         self, name: str, github_token: str | None
     ) -> dict[str, str] | None:
@@ -102,9 +108,7 @@ class PodmanBackend:
         from paude.agents import get_agent
         from paude.agents.base import build_secret_environment_from_config
 
-        container = find_container_by_session_name(self._runner, name)
-        labels = (container.get("Labels", {}) or {}) if container else {}
-        agent_name = labels.get(PAUDE_LABEL_AGENT, "claude")
+        agent_name = self._get_session_agent_name(name)
         agent = get_agent(agent_name)
         secret_env = build_secret_environment_from_config(agent.config)
 
@@ -113,6 +117,16 @@ class PodmanBackend:
             extra_env["GH_TOKEN"] = github_token
         extra_env.update(secret_env)
         return extra_env or None
+
+    def _sync_host_config(self, cname: str, agent_name: str) -> None:
+        """Copy host config files into /credentials/ via podman cp.
+
+        Delegates to ConfigSyncer which mirrors the OpenShift pattern.
+        Skipped for SSH remotes which use bind mounts instead.
+        """
+        from paude.backends.podman.sync import ConfigSyncer
+
+        ConfigSyncer(self._engine).sync(cname, agent_name)
 
     @staticmethod
     def _local_adc_path() -> Path | None:
@@ -294,6 +308,7 @@ class PodmanBackend:
         self._runner.start_container(cname)
         self._fix_volume_permissions(cname)
         self._inject_credentials(cname)
+        self._sync_host_config(cname, self._get_session_agent_name(name))
 
     def delete_session(self, name: str, confirm: bool = False) -> None:
         """Delete a session and all its resources."""
@@ -357,6 +372,7 @@ class PodmanBackend:
         self._runner.start_container(cname)
         self._fix_volume_permissions(cname)
         self._inject_credentials(cname)
+        self._sync_host_config(cname, self._get_session_agent_name(name))
 
         return self._runner.attach_container(
             cname,
@@ -414,6 +430,9 @@ class PodmanBackend:
             print(f"  paude remote add {name}", file=sys.stderr)
             print(f"  git push paude-{name} main", file=sys.stderr)
             print("", file=sys.stderr)
+
+        # Re-sync config on every connect (refreshes if user updated config)
+        self._sync_host_config(cname, self._get_session_agent_name(name))
 
         print(f"Connecting to session '{name}'...", file=sys.stderr)
         return self._runner.attach_container(

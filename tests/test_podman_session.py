@@ -19,6 +19,7 @@ from paude.backends.podman.helpers import (
     find_container_by_session_name,
 )
 from paude.backends.shared import (
+    PAUDE_LABEL_AGENT,
     PAUDE_LABEL_APP,
     PAUDE_LABEL_CREATED,
     PAUDE_LABEL_DOMAINS,
@@ -55,10 +56,12 @@ def _make_backend(
             mock_runner.engine.binary = "podman"
             mock_runner.engine.supports_multi_network_create = True
             mock_runner.engine.default_bridge_network = "podman"
+            mock_runner.engine.is_remote = False
             mock_runner.engine.run.return_value = MagicMock(
                 returncode=0, stdout="", stderr=""
             )
         backend._runner = mock_runner
+        backend._engine = mock_runner.engine
     if mock_network_manager is not None:
         backend._network_manager = mock_network_manager
     # Always mock volume manager to prevent real podman calls
@@ -631,13 +634,17 @@ class TestPodmanBackendConnectSession:
         mock_runner.attach_container.return_value = 0
         # Workspace has .git directory
         mock_runner.exec_in_container.return_value = MagicMock(returncode=0)
+        mock_runner.list_containers.return_value = [
+            {"Labels": {PAUDE_LABEL_SESSION: "my-session", PAUDE_LABEL_AGENT: "claude"}}
+        ]
         mock_runner_class.return_value = mock_runner
 
         backend = PodmanBackend()
         backend._runner = mock_runner
         backend._proxy._runner = mock_runner
 
-        exit_code = backend.connect_session("my-session")
+        with patch.object(backend, "_sync_host_config"):
+            exit_code = backend.connect_session("my-session")
 
         mock_runner.attach_container.assert_called_once()
         assert exit_code == 0
@@ -653,13 +660,17 @@ class TestPodmanBackendConnectSession:
         mock_runner.attach_container.return_value = 0
         # Workspace is empty (no .git directory)
         mock_runner.exec_in_container.return_value = MagicMock(returncode=1)
+        mock_runner.list_containers.return_value = [
+            {"Labels": {PAUDE_LABEL_SESSION: "my-session", PAUDE_LABEL_AGENT: "claude"}}
+        ]
         mock_runner_class.return_value = mock_runner
 
         backend = PodmanBackend()
         backend._runner = mock_runner
         backend._proxy._runner = mock_runner
 
-        exit_code = backend.connect_session("my-session")
+        with patch.object(backend, "_sync_host_config"):
+            exit_code = backend.connect_session("my-session")
 
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -1092,7 +1103,8 @@ class TestPodmanBackendGcpAdcSecret:
         backend._runner = mock_runner
         backend._proxy._runner = mock_runner
 
-        backend.start_session("my-session")
+        with patch.object(backend, "_sync_host_config"):
+            backend.start_session("my-session")
 
         mock_runner.create_secret.assert_called_once()
         assert mock_runner.create_secret.call_args[0][0] == "paude-gcp-adc"
@@ -1716,3 +1728,327 @@ class TestBuildSessionFromContainer:
         session = build_session_from_container("my-session", container, mock_runner)
 
         assert session.status == "degraded"
+
+
+class TestPodmanBackendSyncHostConfig:
+    """Tests for PodmanBackend._sync_host_config."""
+
+    def test_sync_copies_agent_config_dir(self, tmp_path: Path) -> None:
+        """Sync copies agent config directory to /credentials/."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            claude_dir = tmp_path / ".claude"
+            claude_dir.mkdir()
+            (claude_dir / "settings.json").write_text("{}")
+
+            backend._sync_host_config("paude-test", "claude")
+
+        # Should have called podman cp for config dir contents
+        cp_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == "cp"
+        ]
+        assert len(cp_calls) > 0
+
+    def test_sync_copies_gitconfig(self, tmp_path: Path) -> None:
+        """Sync copies .gitconfig to /credentials/gitconfig."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            (tmp_path / ".gitconfig").write_text("[user]\n  name = Test\n")
+
+            backend._sync_host_config("paude-test", "claude")
+
+        # Should have called podman cp for gitconfig
+        cp_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == "cp" and "gitconfig" in str(c[0][1])
+        ]
+        assert len(cp_calls) == 1
+
+    def test_sync_creates_ready_marker(self, tmp_path: Path) -> None:
+        """Sync creates /credentials/.ready marker."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            backend._sync_host_config("paude-test", "claude")
+
+        # Should have called exec touch /credentials/.ready
+        exec_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 4
+            and c[0][0] == "exec"
+            and "touch" in c[0]
+            and "/credentials/.ready" in c[0]
+        ]
+        assert len(exec_calls) == 1
+
+    def test_sync_skipped_for_remote_engine(self, tmp_path: Path) -> None:
+        """Sync is skipped when engine is remote (SSH)."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = True
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            (tmp_path / ".claude").mkdir()
+            (tmp_path / ".gitconfig").write_text("[user]\n  name = Test\n")
+
+            backend._sync_host_config("paude-test", "claude")
+
+        # Should NOT have called any podman commands
+        mock_runner.engine.run.assert_not_called()
+
+    def test_sync_copies_config_file(self, tmp_path: Path) -> None:
+        """Sync copies agent config file (e.g., .claude.json)."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            (tmp_path / ".claude.json").write_text("{}")
+
+            backend._sync_host_config("paude-test", "claude")
+
+        # Should have called podman cp for .claude.json
+        cp_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == "cp" and ".claude.json" in str(c[0][1])
+        ]
+        assert len(cp_calls) == 1
+        # Dest should be /credentials/claude/claude.json
+        assert "paude-test:/credentials/claude/claude.json" in str(cp_calls[0])
+
+    def test_sync_cursor_copies_auth_json(self, tmp_path: Path) -> None:
+        """Sync copies cursor auth.json for cursor agent."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            cursor_config = tmp_path / ".config" / "cursor"
+            cursor_config.mkdir(parents=True)
+            (cursor_config / "auth.json").write_text("{}")
+
+            backend._sync_host_config("paude-test", "cursor")
+
+        # Should have called podman cp for auth.json
+        cp_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == "cp" and "auth.json" in str(c[0][1])
+        ]
+        assert len(cp_calls) == 1
+        assert "paude-test:/credentials/cursor-auth.json" in str(cp_calls[0])
+
+    def test_sync_logs_warning_when_step_fails(self, tmp_path: Path, capsys) -> None:
+        """Sync logs a warning when a podman sync step fails."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+
+        def run_side_effect(*args, **kwargs):
+            if args[:7] == (
+                "exec",
+                "--user",
+                "root",
+                "paude-test",
+                "mkdir",
+                "-p",
+                "/credentials",
+            ):
+                return MagicMock(returncode=1, stdout="", stderr="boom")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        mock_runner.engine.run.side_effect = run_side_effect
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            backend._sync_host_config("paude-test", "claude")
+
+        captured = capsys.readouterr()
+        assert (
+            "Warning: podman config sync step failed "
+            "(create credentials directory): boom"
+        ) in captured.err
+
+    def test_start_session_calls_sync(self) -> None:
+        """start_session calls _sync_host_config before attach."""
+        mock_runner = MagicMock()
+        mock_runner.container_exists.side_effect = (
+            lambda name: name == "paude-my-session"
+        )
+        mock_runner.get_container_state.return_value = "exited"
+        mock_runner.attach_container.return_value = 0
+        mock_runner.list_containers.return_value = [
+            {
+                "Labels": {
+                    PAUDE_LABEL_SESSION: "my-session",
+                    PAUDE_LABEL_AGENT: "claude",
+                },
+            }
+        ]
+
+        backend = _make_backend(mock_runner)
+        backend._engine = MagicMock()
+        backend._engine.is_remote = False
+        backend._engine.supports_secrets = True
+        backend._engine.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch.object(backend, "_sync_host_config") as mock_sync:
+            backend.start_session("my-session")
+            mock_sync.assert_called_once()
+
+    def test_connect_session_calls_sync(self) -> None:
+        """connect_session calls _sync_host_config before attach."""
+        mock_runner = MagicMock()
+        mock_runner.container_exists.side_effect = (
+            lambda name: name == "paude-my-session"
+        )
+        mock_runner.container_running.return_value = True
+        mock_runner.attach_container.return_value = 0
+        mock_runner.exec_in_container.return_value = MagicMock(returncode=0)
+        mock_runner.list_containers.return_value = [
+            {
+                "Labels": {
+                    PAUDE_LABEL_SESSION: "my-session",
+                    PAUDE_LABEL_AGENT: "claude",
+                },
+            }
+        ]
+
+        backend = _make_backend(mock_runner)
+        backend._engine = MagicMock()
+        backend._engine.is_remote = False
+        backend._engine.run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch.object(backend, "_sync_host_config") as mock_sync:
+            backend.connect_session("my-session")
+            mock_sync.assert_called_once()
+
+    def test_sync_excludes_config_excludes(self, tmp_path: Path) -> None:
+        """Sync filters out config_excludes (e.g., projects/, todos/)."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            claude_dir = tmp_path / ".claude"
+            claude_dir.mkdir()
+            (claude_dir / "settings.json").write_text("{}")
+            # Create dirs that should be excluded
+            (claude_dir / "projects").mkdir()
+            (claude_dir / "projects" / "big_file.json").write_text("{}")
+            (claude_dir / "todos").mkdir()
+            (claude_dir / "todos" / "todo.json").write_text("{}")
+            (claude_dir / "cache").mkdir()
+            (claude_dir / "cache" / "data.bin").write_text("x" * 100)
+
+            backend._sync_host_config("paude-test", "claude")
+
+        # Find the cp call that copies the config dir
+        cp_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 2
+            and c[0][0] == "cp"
+            and "/credentials/claude" in str(c[0][2])
+        ]
+        assert len(cp_calls) == 1
+        # The source path should be a filtered temp dir, not the original
+        source = cp_calls[0][0][1]
+        assert "filtered" in source
+        # Verify the temp dir would not contain excluded dirs
+        assert "projects" not in source
+        assert "todos" not in source
+
+    def test_sync_copies_global_gitignore(self, tmp_path: Path) -> None:
+        """Sync copies global gitignore to /credentials/gitignore-global."""
+        mock_runner = MagicMock()
+        mock_runner.engine.binary = "podman"
+        mock_runner.engine.supports_multi_network_create = True
+        mock_runner.engine.default_bridge_network = "podman"
+        mock_runner.engine.is_remote = False
+        mock_runner.engine.run.return_value = MagicMock(
+            returncode=0, stdout="", stderr=""
+        )
+        backend = _make_backend(mock_runner)
+        backend._engine = mock_runner.engine
+
+        with patch("paude.backends.podman.sync.Path.home", return_value=tmp_path):
+            git_config = tmp_path / ".config" / "git"
+            git_config.mkdir(parents=True)
+            (git_config / "ignore").write_text(".DS_Store\n*.swp\n")
+
+            backend._sync_host_config("paude-test", "claude")
+
+        # Should have called podman cp for gitignore-global
+        cp_calls = [
+            c
+            for c in mock_runner.engine.run.call_args_list
+            if len(c[0]) >= 2 and c[0][0] == "cp" and "gitignore-global" in str(c[0][2])
+        ]
+        assert len(cp_calls) == 1
+        assert "paude-test:/credentials/gitignore-global" in str(cp_calls[0])
