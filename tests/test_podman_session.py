@@ -634,13 +634,17 @@ class TestPodmanBackendConnectSession:
         mock_runner.attach_container.return_value = 0
         # Workspace has .git directory
         mock_runner.exec_in_container.return_value = MagicMock(returncode=0)
+        mock_runner.list_containers.return_value = [
+            {"Labels": {PAUDE_LABEL_SESSION: "my-session", PAUDE_LABEL_AGENT: "claude"}}
+        ]
         mock_runner_class.return_value = mock_runner
 
         backend = PodmanBackend()
         backend._runner = mock_runner
         backend._proxy._runner = mock_runner
 
-        exit_code = backend.connect_session("my-session")
+        with patch.object(backend, "_sync_host_config"):
+            exit_code = backend.connect_session("my-session")
 
         mock_runner.attach_container.assert_called_once()
         assert exit_code == 0
@@ -656,13 +660,17 @@ class TestPodmanBackendConnectSession:
         mock_runner.attach_container.return_value = 0
         # Workspace is empty (no .git directory)
         mock_runner.exec_in_container.return_value = MagicMock(returncode=1)
+        mock_runner.list_containers.return_value = [
+            {"Labels": {PAUDE_LABEL_SESSION: "my-session", PAUDE_LABEL_AGENT: "claude"}}
+        ]
         mock_runner_class.return_value = mock_runner
 
         backend = PodmanBackend()
         backend._runner = mock_runner
         backend._proxy._runner = mock_runner
 
-        exit_code = backend.connect_session("my-session")
+        with patch.object(backend, "_sync_host_config"):
+            exit_code = backend.connect_session("my-session")
 
         assert exit_code == 0
         captured = capsys.readouterr()
@@ -1095,7 +1103,8 @@ class TestPodmanBackendGcpAdcSecret:
         backend._runner = mock_runner
         backend._proxy._runner = mock_runner
 
-        backend.start_session("my-session")
+        with patch.object(backend, "_sync_host_config"):
+            backend.start_session("my-session")
 
         mock_runner.create_secret.assert_called_once()
         assert mock_runner.create_secret.call_args[0][0] == "paude-gcp-adc"
